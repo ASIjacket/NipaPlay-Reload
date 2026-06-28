@@ -1,6 +1,8 @@
 name: Build Windows
 
 on:
+  # 允许在 Actions 页面手动触发，构建单独的 Windows 产物（无需走完整 release 流程）。
+  workflow_dispatch:
   workflow_call:
     outputs:
       version:
