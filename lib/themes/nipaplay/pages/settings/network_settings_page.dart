@@ -9,6 +9,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/player_abstraction/player_factory.dart';
+import 'package:nipaplay/services/media_server_service_base.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 
 class NetworkSettingsPage extends StatefulWidget {
@@ -70,6 +71,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
       _isSavingProxy = true;
     });
     await PlayerFactory.saveHttpProxy(value);
+    MediaServerServiceBase.setHttpProxyOverride(value);
     if (!mounted) return;
     setState(() {
       _proxyController.text = value;
@@ -78,8 +80,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     BlurSnackBar.show(
       context,
       value.isEmpty
-          ? '已清除播放器代理，重新开始播放后生效'
-          : '已保存播放器代理，重新开始播放后生效',
+          ? '已清除代理：Emby/Jellyfin 连接立即生效，视频流请重新开始播放'
+          : '已保存代理：Emby/Jellyfin 连接立即生效，视频流请重新开始播放',
     );
   }
 
@@ -106,9 +108,10 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            '为播放器网络视频流设置 HTTP/HTTPS 代理，仅对 MDK / Libmpv 内核的视频流生效，'
-            '不影响 App 其它网络请求。格式如 http://127.0.0.1:7890，留空表示不使用代理。'
-            '修改后需重新开始播放生效。',
+            '为 Emby / Jellyfin 媒体服务器设置 HTTP/HTTPS 代理：同时作用于服务器连接'
+            '（API 请求）与视频流（MDK / Libmpv 内核），不影响弹弹play / Bangumi 等其它请求。'
+            '格式如 http://127.0.0.1:8000，留空表示不使用代理。连接请重新点击登录、'
+            '播放请重新开始。',
             style: TextStyle(
                 color: colorScheme.onSurface.withOpacity(0.7), fontSize: 12),
           ),
@@ -117,7 +120,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
             controller: _proxyController,
             cursorColor: AppAccentColors.current,
             decoration: InputDecoration(
-              hintText: 'http://127.0.0.1:7890',
+              hintText: 'http://127.0.0.1:8000',
               hintStyle:
                   TextStyle(color: colorScheme.onSurface.withOpacity(0.38)),
               filled: true,

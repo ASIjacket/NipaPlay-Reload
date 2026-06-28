@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/constants/settings_keys.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
 import 'package:nipaplay/models/server_profile_model.dart';
@@ -14,6 +16,48 @@ import 'dart:io' if (dart.library.io) 'dart:io';
 
 abstract class MediaServerServiceBase {
   static const int _maxRedirects = 5;
+
+  // Emby/Jellyfin 连接可选的 HTTP/HTTPS 代理（与播放器代理共用同一设置键）。
+  // null = 尚未从持久化读取；'' = 不使用代理（行为与改动前完全一致）。
+  static String? _httpProxyCache;
+
+  /// 设置页保存代理后调用，立即刷新缓存（无需重启即可对下一次连接生效）。
+  static void setHttpProxyOverride(String value) {
+    _httpProxyCache = value.trim();
+  }
+
+  static Future<String> _resolveHttpProxy() async {
+    final cached = _httpProxyCache;
+    if (cached != null) return cached;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value =
+          (prefs.getString(SettingsKeys.playerHttpProxy) ?? '').trim();
+      _httpProxyCache = value;
+      return value;
+    } catch (_) {
+      _httpProxyCache = '';
+      return '';
+    }
+  }
+
+  /// 按代理设置创建一次性 http 客户端。代理为空 / Web 平台时退回默认客户端，
+  /// 行为与原先的 `request.send()` 完全一致（两者都是一次性客户端）。
+  static http.Client _createHttpClient(String proxy) {
+    if (kIsWeb || proxy.isEmpty) {
+      return http.Client();
+    }
+    final normalized = proxy.contains('://') ? proxy : 'http://$proxy';
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || uri.host.isEmpty) {
+      return http.Client();
+    }
+    final port =
+        uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
+    final inner = HttpClient()
+      ..findProxy = ((_) => 'PROXY ${uri.host}:$port');
+    return IOClient(inner);
+  }
 
   final MultiAddressServerService _multiAddressService =
       MultiAddressServerService.instance;
@@ -669,6 +713,15 @@ abstract class MediaServerServiceBase {
       ..followRedirects = false
       ..headers.addAll(headers);
 
+    // Emby/Jellyfin 服务器可能位于按 User-Agent 过滤的 WAF/CDN 之后，dart:io 的
+    // 默认 UA（`Dart/x (dart:io)`）会被拦截（典型表现 403/404）。若调用方未显式
+    // 指定 UA，则补一个受支持的 App 标识，恢复旧版本行为。
+    final hasUserAgent =
+        request.headers.keys.any((k) => k.toLowerCase() == 'user-agent');
+    if (!hasUserAgent) {
+      request.headers['User-Agent'] = 'NipaPlay/1.0';
+    }
+
     switch (method) {
       case 'GET':
       case 'DELETE':
@@ -683,8 +736,14 @@ abstract class MediaServerServiceBase {
         throw Exception('不支持的 HTTP 方法: $method');
     }
 
-    final streamedResponse = await request.send().timeout(timeout);
-    return http.Response.fromStream(streamedResponse).timeout(timeout);
+    final proxy = await _resolveHttpProxy();
+    final client = _createHttpClient(proxy);
+    try {
+      final streamedResponse = await client.send(request).timeout(timeout);
+      return await http.Response.fromStream(streamedResponse).timeout(timeout);
+    } finally {
+      client.close();
+    }
   }
 
   bool _isRedirectStatus(int statusCode) {
