@@ -64,7 +64,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
         !value.startsWith('http://') &&
         !value.startsWith('https://')) {
       BlurSnackBar.show(
-          context, '仅支持 HTTP/HTTPS 代理，需带协议头，例如 http://127.0.0.1:7890');
+          context, '仅支持 HTTP/HTTPS 代理，需带协议头，例如 http://127.0.0.1:8000');
       return;
     }
     setState(() {
