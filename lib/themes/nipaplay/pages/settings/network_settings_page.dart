@@ -9,6 +9,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/player_abstraction/player_factory.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
 
 class NetworkSettingsPage extends StatefulWidget {
   const NetworkSettingsPage({super.key});
@@ -517,8 +518,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
           ),
           Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
 
-          // 播放器网络代理（仅原生平台，Web 使用 video_player 内核不支持）
-          if (!kIsWeb) ...[
+          // 播放器网络代理（仅桌面平台；手机端走系统级代理，不在此暴露）
+          if (globals.isDesktop) ...[
             _buildProxySection(colorScheme),
             Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
           ],
