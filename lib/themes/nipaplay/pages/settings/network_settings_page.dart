@@ -8,6 +8,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/player_abstraction/player_factory.dart';
 
 class NetworkSettingsPage extends StatefulWidget {
   const NetworkSettingsPage({super.key});
@@ -26,12 +27,16 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
       TextEditingController();
   bool _isSavingCustom = false;
   bool _isSavingBangumiCustom = false;
+  // 播放器网络流 HTTP/HTTPS 代理
+  final TextEditingController _proxyController = TextEditingController();
+  bool _isSavingProxy = false;
 
   final _connectivity = ServerConnectivityService.instance;
 
   @override
   void initState() {
     super.initState();
+    _proxyController.text = PlayerFactory.getHttpProxy();
     _loadCurrentServer();
     _connectivity.dandanplayNotifier.addListener(_onConnectivityChanged);
     _connectivity.bangumiNotifier.addListener(_onConnectivityChanged);
@@ -45,7 +50,107 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     _connectivity.checkingNotifier.removeListener(_onConnectivityChanged);
     _customServerController.dispose();
     _customBangumiServerController.dispose();
+    _proxyController.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveProxy() async {
+    if (_isSavingProxy) return;
+    final value = _proxyController.text.trim();
+    // mpv 的 http-proxy 与 FFmpeg 的 http_proxy 均只支持 HTTP/HTTPS 代理。
+    if (value.isNotEmpty &&
+        !value.startsWith('http://') &&
+        !value.startsWith('https://')) {
+      BlurSnackBar.show(
+          context, '仅支持 HTTP/HTTPS 代理，需带协议头，例如 http://127.0.0.1:7890');
+      return;
+    }
+    setState(() {
+      _isSavingProxy = true;
+    });
+    await PlayerFactory.saveHttpProxy(value);
+    if (!mounted) return;
+    setState(() {
+      _proxyController.text = value;
+      _isSavingProxy = false;
+    });
+    BlurSnackBar.show(
+      context,
+      value.isEmpty
+          ? '已清除播放器代理，重新开始播放后生效'
+          : '已保存播放器代理，重新开始播放后生效',
+    );
+  }
+
+  Widget _buildProxySection(ColorScheme colorScheme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Ionicons.git_network_outline,
+                  color: colorScheme.onSurface, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                '播放器网络代理',
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '为播放器网络视频流设置 HTTP/HTTPS 代理，仅对 MDK / Libmpv 内核的视频流生效，'
+            '不影响 App 其它网络请求。格式如 http://127.0.0.1:7890，留空表示不使用代理。'
+            '修改后需重新开始播放生效。',
+            style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.7), fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _proxyController,
+            cursorColor: AppAccentColors.current,
+            decoration: InputDecoration(
+              hintText: 'http://127.0.0.1:7890',
+              hintStyle:
+                  TextStyle(color: colorScheme.onSurface.withOpacity(0.38)),
+              filled: true,
+              fillColor: colorScheme.onSurface.withOpacity(0.1),
+              border: const OutlineInputBorder(
+                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide:
+                    BorderSide(color: AppAccentColors.current, width: 2),
+                borderRadius: const BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            style: TextStyle(color: colorScheme.onSurface),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: BlurButton(
+              icon: _isSavingProxy ? null : Ionicons.checkmark_outline,
+              text: _isSavingProxy ? context.l10n.saving : '保存',
+              onTap: _isSavingProxy ? () {} : _saveProxy,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              fontSize: 13,
+              iconSize: 16,
+              foregroundColor: colorScheme.onSurface,
+              hoverForegroundColor: AppAccentColors.current,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _onConnectivityChanged() {
@@ -411,6 +516,12 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
             ),
           ),
           Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
+
+          // 播放器网络代理（仅原生平台，Web 使用 video_player 内核不支持）
+          if (!kIsWeb) ...[
+            _buildProxySection(colorScheme),
+            Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
+          ],
 
           // Bangumi 服务器配置
           Padding(

@@ -5,7 +5,8 @@ import './player_data_models.dart';
 import 'dart:async';
 
 class MdkPlayerAdapter implements AbstractPlayer {
-  MdkPlayerAdapter();
+  // 参数与 io 实现保持一致，使工厂的统一构造调用在不支持平台也能编译。
+  MdkPlayerAdapter({String? userAgent, String? httpProxy});
   
   @override
   double get volume => 1.0;

@@ -5,6 +5,7 @@ import './media_kit_player_adapter.dart'; // 导入新的MediaKit适配器
 import './erika_player_adapter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart'; // 用于 debugPrint
+import 'package:nipaplay/constants/settings_keys.dart'; // 自定义 UA / 代理 设置键
 import 'package:nipaplay/utils/system_resource_monitor.dart'; // 导入系统资源监控器
 import 'dart:async'; // 导入dart:async库
 
@@ -31,6 +32,9 @@ class PlayerFactory {
   static int _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
   static bool _cachedMacOSNativeVideoEnabled = false;
   static String _cachedAndroidAudioOutput = 'opensles';
+  // 自定义网络流 User-Agent / HTTP 代理（留空表示不覆盖内核默认行为）。
+  static String _cachedCustomUserAgent = '';
+  static String _cachedHttpProxy = '';
   static bool _hasLoadedSettings = false;
 
   // 添加一个StreamController来广播内核切换事件
@@ -63,6 +67,9 @@ class PlayerFactory {
           prefs.getBool(_macOSNativeVideoEnabledKey) ?? false;
       final androidAudioOutput =
           prefs.getString(_androidAudioOutputKey) ?? 'opensles';
+      final customUserAgent =
+          prefs.getString(SettingsKeys.playerCustomUserAgent) ?? '';
+      final httpProxy = prefs.getString(SettingsKeys.playerHttpProxy) ?? '';
 
       if (kernelTypeIndex != null &&
           kernelTypeIndex < PlayerKernelType.values.length) {
@@ -80,6 +87,8 @@ class PlayerFactory {
         _cachedMacOSNativeVideoEnabled,
       );
       _cachedAndroidAudioOutput = androidAudioOutput;
+      _cachedCustomUserAgent = customUserAgent.trim();
+      _cachedHttpProxy = httpProxy.trim();
 
       _hasLoadedSettings = true;
     } catch (e) {
@@ -88,6 +97,8 @@ class PlayerFactory {
       _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
       _cachedMacOSNativeVideoEnabled = false;
       _cachedAndroidAudioOutput = 'opensles';
+      _cachedCustomUserAgent = '';
+      _cachedHttpProxy = '';
       MediaKitPlayerAdapter.setMacOSNativeVideoPreference(false);
       _hasLoadedSettings = true;
     }
@@ -101,6 +112,8 @@ class PlayerFactory {
       _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
       _cachedMacOSNativeVideoEnabled = false;
       _cachedAndroidAudioOutput = 'opensles';
+      _cachedCustomUserAgent = '';
+      _cachedHttpProxy = '';
       MediaKitPlayerAdapter.setMacOSNativeVideoPreference(false);
       _hasLoadedSettings = true;
 
@@ -127,6 +140,12 @@ class PlayerFactory {
           _cachedMacOSNativeVideoEnabled,
         );
         _cachedAndroidAudioOutput = androidAudioOutput;
+        _cachedCustomUserAgent =
+            (prefs.getString(SettingsKeys.playerCustomUserAgent) ?? '').trim();
+        _cachedHttpProxy =
+            (prefs.getString(SettingsKeys.playerHttpProxy) ?? '').trim();
+      }).catchError((e) {
+        debugPrint('[PlayerFactory] 异步加载设置出错: $e');
       });
 
       debugPrint('[PlayerFactory] 同步设置临时默认值: MDK');
@@ -135,6 +154,8 @@ class PlayerFactory {
       _cachedKernelType = PlayerKernelType.mdk;
       _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
       _cachedAndroidAudioOutput = 'opensles';
+      _cachedCustomUserAgent = '';
+      _cachedHttpProxy = '';
     }
   }
 
@@ -215,6 +236,48 @@ class PlayerFactory {
     }
   }
 
+  /// 自定义网络流 User-Agent（留空表示使用内核默认值）。
+  static String getCustomUserAgent() {
+    if (!_hasLoadedSettings) {
+      _loadSettingsSync();
+    }
+    return _cachedCustomUserAgent;
+  }
+
+  static Future<void> saveCustomUserAgent(String userAgent) async {
+    final resolved = userAgent.trim();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(SettingsKeys.playerCustomUserAgent, resolved);
+      _cachedCustomUserAgent = resolved;
+      debugPrint('[PlayerFactory] 保存自定义 User-Agent: '
+          '${resolved.isEmpty ? '(默认)' : resolved}');
+    } catch (e) {
+      debugPrint('[PlayerFactory] 保存自定义 User-Agent 出错: $e');
+    }
+  }
+
+  /// 播放器网络流 HTTP/HTTPS 代理（留空表示不使用代理）。
+  static String getHttpProxy() {
+    if (!_hasLoadedSettings) {
+      _loadSettingsSync();
+    }
+    return _cachedHttpProxy;
+  }
+
+  static Future<void> saveHttpProxy(String proxy) async {
+    final resolved = proxy.trim();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(SettingsKeys.playerHttpProxy, resolved);
+      _cachedHttpProxy = resolved;
+      debugPrint('[PlayerFactory] 保存播放器代理: '
+          '${resolved.isEmpty ? '(无)' : resolved}');
+    } catch (e) {
+      debugPrint('[PlayerFactory] 保存播放器代理出错: $e');
+    }
+  }
+
   // 创建播放器实例
   AbstractPlayer createPlayer({PlayerKernelType? kernelType}) {
     // 如果是Web平台，强制使用VideoPlayer
@@ -226,10 +289,16 @@ class PlayerFactory {
     // 如果没有指定内核类型，从缓存或设置中读取
     kernelType ??= getKernelType();
 
+    final customUserAgent = getCustomUserAgent();
+    final httpProxy = getHttpProxy();
+
     switch (kernelType) {
       case PlayerKernelType.mdk:
         debugPrint('[PlayerFactory] 创建 MDK 播放器');
-        return MdkPlayerAdapter();
+        return MdkPlayerAdapter(
+          userAgent: customUserAgent,
+          httpProxy: httpProxy,
+        );
       case PlayerKernelType.videoPlayer:
         debugPrint('[PlayerFactory] 创建 Video Player 播放器');
         return VideoPlayerAdapter();
@@ -237,6 +306,8 @@ class PlayerFactory {
         return MediaKitPlayerAdapter(
           bufferSize: getPrecacheBufferSizeBytes(),
           androidAudioOutput: getAndroidAudioOutput(),
+          userAgent: customUserAgent,
+          httpProxy: httpProxy,
         );
       case PlayerKernelType.erika:
         debugPrint('[PlayerFactory] 创建 Erika 播放器');

@@ -16,6 +16,8 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
 import 'package:nipaplay/player_abstraction/player_data_models.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/settings_item.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
+import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/providers/labs_settings_provider.dart';
 import 'package:nipaplay/utils/player_kernel_manager.dart';
 import 'package:nipaplay/utils/anime4k_shader_manager.dart';
@@ -82,6 +84,10 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
       TextEditingController();
   bool _spoilerAiControllersInitialized = false;
   bool _isSavingSpoilerAiSettings = false;
+  // 自定义网络流 User-Agent
+  final TextEditingController _userAgentController = TextEditingController();
+  bool _networkOptionsInitialized = false;
+  bool _isSavingUserAgent = false;
   SpoilerAiApiFormat _spoilerAiApiFormatDraft = SpoilerAiApiFormat.openai;
   double _spoilerAiTemperatureDraft = 0.5;
 
@@ -95,6 +101,7 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
     _spoilerAiUrlController.dispose();
     _spoilerAiModelController.dispose();
     _spoilerAiApiKeyController.dispose();
+    _userAgentController.dispose();
     super.dispose();
   }
 
@@ -123,6 +130,102 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
       _spoilerAiApiKeyController.text = playerState.spoilerAiApiKey;
       _spoilerAiControllersInitialized = true;
     }
+
+    if (!_networkOptionsInitialized) {
+      _userAgentController.text = PlayerFactory.getCustomUserAgent();
+      _networkOptionsInitialized = true;
+    }
+  }
+
+  Future<void> _saveUserAgent() async {
+    if (_isSavingUserAgent) return;
+    final value = _userAgentController.text.trim();
+    setState(() {
+      _isSavingUserAgent = true;
+    });
+    await PlayerFactory.saveCustomUserAgent(value);
+    if (!mounted) return;
+    setState(() {
+      _userAgentController.text = value;
+      _isSavingUserAgent = false;
+    });
+    BlurSnackBar.show(
+      context,
+      value.isEmpty
+          ? '已恢复默认 User-Agent，重新开始播放后生效'
+          : '已保存自定义 User-Agent，重新开始播放后生效',
+    );
+  }
+
+  Widget _buildUserAgentSection(ColorScheme colorScheme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Ionicons.globe_outline,
+                  color: colorScheme.onSurface, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                '网络流 User-Agent',
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '自定义网络视频流的 User-Agent，仅对 MDK / Libmpv 内核生效。'
+            '留空则使用内核默认值。某些服务器或 CDN（例如基于 Cloudflare 的 Emby）'
+            '会拦截默认 UA，可填入受支持的客户端 UA。修改后需重新开始播放生效。',
+            style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.7), fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _userAgentController,
+            cursorColor: AppAccentColors.current,
+            decoration: InputDecoration(
+              hintText: 'VLC/3.0.20 LibVLC/3.0.20',
+              hintStyle:
+                  TextStyle(color: colorScheme.onSurface.withOpacity(0.38)),
+              filled: true,
+              fillColor: colorScheme.onSurface.withOpacity(0.1),
+              border: const OutlineInputBorder(
+                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide:
+                    BorderSide(color: AppAccentColors.current, width: 2),
+                borderRadius: const BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            style: TextStyle(color: colorScheme.onSurface),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: BlurButton(
+              icon: _isSavingUserAgent ? null : Ionicons.checkmark_outline,
+              text: _isSavingUserAgent ? '保存中…' : '保存',
+              onTap: _isSavingUserAgent ? () {} : _saveUserAgent,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              fontSize: 13,
+              iconSize: 16,
+              foregroundColor: colorScheme.onSurface,
+              hoverForegroundColor: AppAccentColors.current,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadCurrentPlayerKernelName() async {
@@ -697,6 +800,12 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
               );
             },
           ),
+          Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
+        ],
+        if (!kIsWeb &&
+            (visibleKernelType == PlayerKernelType.mdk ||
+                visibleKernelType == PlayerKernelType.mediaKit)) ...[
+          _buildUserAgentSection(colorScheme),
           Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
         ],
         if (!kIsWeb &&
