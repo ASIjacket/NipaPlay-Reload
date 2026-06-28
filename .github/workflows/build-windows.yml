@@ -55,9 +55,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-Windows-x64
+          # 只上传打包成品，不上传庞大的原始构建目录。手动触发(workflow_dispatch
+          # 直跑 Build Windows)时仅生成 zip；完整 release(被 main.yml 调用)时另含
+          # Setup.exe / msix。
           path: |
-            build/windows/*
-            !build/windows/symbols-windows
+            build/windows/*.zip
+            build/windows/*_Setup.exe
+            build/windows/*.msix
+          if-no-files-found: warn
 
       - name: Upload Dart debug symbols (for de-obfuscating crash stacks)
         uses: actions/upload-artifact@v4
