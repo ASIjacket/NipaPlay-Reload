@@ -153,7 +153,12 @@ runs:
           return $true
         }
 
+        # GitHub release v0.35.1 是最后一个仍带 vs2022-x64 资产的 tag（v0.36+ 改用
+        # vs2026，runner 工具链不兼容）。优先用 GitHub —— SourceForge 对 CI runner
+        # 经常 403/反爬，而 GitHub release 资产文件名与 fvp 期望的完全一致。
         $candidates = @(
+          "https://github.com/wang-bin/mdk-sdk/releases/download/v0.35.1/$mdkSdkPkg",
+          "https://github.com/wang-bin/mdk-sdk/releases/download/v0.35.0/$mdkSdkPkg",
           "https://sourceforge.net/projects/mdk-sdk/files/nightly/$mdkSdkPkg/download",
           "https://downloads.sourceforge.net/project/mdk-sdk/nightly/$mdkSdkPkg",
           "https://master.dl.sourceforge.net/project/mdk-sdk/nightly/$mdkSdkPkg"
@@ -183,14 +188,7 @@ runs:
         }
 
         if (-not $downloaded) {
-          $ghPkg = "mdk-sdk-windows-x64.7z"
-          $ghUrl = "https://github.com/wang-bin/mdk-sdk/releases/latest/download/$ghPkg"
-          $archivePath = Join-Path $fvpDir "windows\$ghPkg"
-          Write-Host "SourceForge mirrors unavailable; falling back to GitHub release $ghUrl ..."
-          Invoke-WebRequest -Uri $ghUrl -OutFile $archivePath -UseBasicParsing -TimeoutSec 180 -Headers $ua
-          if (-not (Test-SevenZip $archivePath)) {
-            throw "GitHub fallback download was not a valid 7z archive: $archivePath"
-          }
+          throw "无法从任何镜像（GitHub release + SourceForge）下载到有效的 mdk-sdk 7z 包。"
         }
 
         # Extract using 7-Zip (CMake's tar can't handle 7z on Windows reliably)
