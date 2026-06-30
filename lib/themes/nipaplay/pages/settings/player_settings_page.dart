@@ -152,8 +152,8 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
     BlurSnackBar.show(
       context,
       value.isEmpty
-          ? '已恢复默认 User-Agent，重新开始播放后生效'
-          : '已保存自定义 User-Agent，重新开始播放后生效',
+          ? '已恢复默认 User-Agent，已应用到播放器'
+          : '已保存自定义 User-Agent，已应用到播放器',
     );
   }
 

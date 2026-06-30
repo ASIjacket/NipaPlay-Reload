@@ -246,15 +246,24 @@ class PlayerFactory {
 
   static Future<void> saveCustomUserAgent(String userAgent) async {
     final resolved = userAgent.trim();
+    final changed = resolved != _cachedCustomUserAgent;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(SettingsKeys.playerCustomUserAgent, resolved);
       _cachedCustomUserAgent = resolved;
       debugPrint('[PlayerFactory] 保存自定义 User-Agent: '
           '${resolved.isEmpty ? '(默认)' : resolved}');
+      if (changed) _notifyNetworkOptionsChanged();
     } catch (e) {
       debugPrint('[PlayerFactory] 保存自定义 User-Agent 出错: $e');
     }
+  }
+
+  /// 播放器在启动时创建并被复用，网络选项（UA / 代理）只在创建时注入。改动后通过
+  /// 复用内核热切换流，让正在运行的播放器以新选项重建并重载当前视频，立即生效。
+  static void _notifyNetworkOptionsChanged() {
+    if (kIsWeb) return;
+    _kernelChangeController.add(_cachedKernelType ?? PlayerKernelType.mdk);
   }
 
   /// 播放器网络流 HTTP/HTTPS 代理（留空表示不使用代理）。
@@ -267,12 +276,14 @@ class PlayerFactory {
 
   static Future<void> saveHttpProxy(String proxy) async {
     final resolved = proxy.trim();
+    final changed = resolved != _cachedHttpProxy;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(SettingsKeys.playerHttpProxy, resolved);
       _cachedHttpProxy = resolved;
       debugPrint('[PlayerFactory] 保存播放器代理: '
           '${resolved.isEmpty ? '(无)' : resolved}');
+      if (changed) _notifyNetworkOptionsChanged();
     } catch (e) {
       debugPrint('[PlayerFactory] 保存播放器代理出错: $e');
     }

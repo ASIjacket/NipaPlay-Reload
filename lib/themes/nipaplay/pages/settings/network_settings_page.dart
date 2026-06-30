@@ -80,8 +80,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     BlurSnackBar.show(
       context,
       value.isEmpty
-          ? '已清除代理：Emby/Jellyfin 连接立即生效，视频流请重新开始播放'
-          : '已保存代理：Emby/Jellyfin 连接立即生效，视频流请重新开始播放',
+          ? '已清除代理：Emby/Jellyfin 连接与播放器均已应用'
+          : '已保存代理：Emby/Jellyfin 连接与播放器均已应用',
     );
   }
 
