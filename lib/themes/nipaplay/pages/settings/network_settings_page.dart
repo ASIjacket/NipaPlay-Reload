@@ -108,10 +108,10 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            '为 Emby / Jellyfin 媒体服务器设置 HTTP/HTTPS 代理：同时作用于服务器连接'
-            '（API 请求）与视频流（MDK / Libmpv 内核），不影响弹弹play / Bangumi 等其它请求。'
-            '格式如 http://127.0.0.1:8000，留空表示不使用代理。连接请重新点击登录、'
-            '播放请重新开始。',
+            '为 Emby / Jellyfin 媒体服务器设置代理：同时作用于服务器连接（API 请求）与'
+            '视频流（MDK / Libmpv 内核），不影响弹弹play / Bangumi 等其它请求。'
+            '仅支持 HTTP / HTTPS 代理（不支持 SOCKS），格式如 http://127.0.0.1:8000，'
+            '留空表示不使用代理。保存后立即生效。',
             style: TextStyle(
                 color: colorScheme.onSurface.withOpacity(0.7), fontSize: 12),
           ),

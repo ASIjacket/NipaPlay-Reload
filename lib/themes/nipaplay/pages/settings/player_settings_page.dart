@@ -182,7 +182,7 @@ class _PlayerSettingsPageState extends State<PlayerSettingsPage> {
           Text(
             '自定义网络视频流的 User-Agent，仅对 MDK / Libmpv 内核生效。'
             '留空则使用内核默认值。某些服务器或 CDN（例如基于 Cloudflare 的 Emby）'
-            '会拦截默认 UA，可填入受支持的客户端 UA。修改后需重新开始播放生效。',
+            '会拦截默认 UA，可填入受支持的客户端 UA。保存后立即生效。',
             style: TextStyle(
                 color: colorScheme.onSurface.withOpacity(0.7), fontSize: 12),
           ),
