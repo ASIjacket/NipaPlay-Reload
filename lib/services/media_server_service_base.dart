@@ -702,6 +702,21 @@ abstract class MediaServerServiceBase {
     }
   }
 
+  /// 更新当前服务器的 API User-Agent 并持久化（留空则回退默认 NipaPlay/1.0）。
+  /// 返回是否写入成功；当前未连接任何服务器（无 profile）时返回 false。
+  Future<bool> updateServerUserAgent(String userAgent) async {
+    final profile = currentProfile;
+    if (profile == null) return false;
+    // 去除换行符，避免被注入到 HTTP 头中。
+    final sanitized = userAgent.replaceAll(RegExp(r'[\r\n]'), '').trim();
+    final resolved = sanitized.isEmpty ? 'NipaPlay/1.0' : sanitized;
+    if (resolved != profile.serverUserAgent) {
+      currentProfile = profile.copyWith(serverUserAgent: resolved);
+      await _multiAddressService.updateProfile(currentProfile!);
+    }
+    return true;
+  }
+
   Future<http.Response> _sendSingleRequest(
     Uri uri, {
     required String method,
@@ -715,11 +730,16 @@ abstract class MediaServerServiceBase {
 
     // Emby/Jellyfin 服务器可能位于按 User-Agent 过滤的 WAF/CDN 之后，dart:io 的
     // 默认 UA（`Dart/x (dart:io)`）会被拦截（典型表现 403/404）。若调用方未显式
-    // 指定 UA，则补一个受支持的 App 标识，恢复旧版本行为。
+    // 指定 UA，则补一个受支持的 App 标识。每个服务器可在其设置里自定义此 UA；
+    // 未配置或初次识别（尚无 profile）时回退到默认 `NipaPlay/1.0`。
     final hasUserAgent =
         request.headers.keys.any((k) => k.toLowerCase() == 'user-agent');
     if (!hasUserAgent) {
-      request.headers['User-Agent'] = 'NipaPlay/1.0';
+      final profileUa = currentProfile?.serverUserAgent.trim();
+      request.headers['User-Agent'] =
+          (profileUa != null && profileUa.isNotEmpty)
+              ? profileUa
+              : 'NipaPlay/1.0';
     }
 
     switch (method) {
