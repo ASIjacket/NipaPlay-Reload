@@ -4,7 +4,6 @@ import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/server_profile_model.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
-import 'package:nipaplay/services/media_server_service_base.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_login_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/fluent_settings_switch.dart';
@@ -371,17 +370,6 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
   JellyfinVideoQuality _selectedQuality = JellyfinVideoQuality.bandwidth5m;
   bool _transcodeEnabled = true;
 
-  // 服务器 API User-Agent（每服务器可配；用于穿过按 UA 过滤的 WAF/CDN）
-  final TextEditingController _userAgentController = TextEditingController();
-  bool _userAgentInitialized = false;
-  bool _isSavingUserAgent = false;
-
-  /// 当前服务器对应的服务单例（Emby / Jellyfin 均继承自 MediaServerServiceBase）。
-  MediaServerServiceBase get _service =>
-      widget.serverType == MediaServerType.emby
-          ? EmbyService.instance
-          : JellyfinService.instance;
-
   bool get _isDarkMode => Theme.of(context).brightness == Brightness.dark;
   Color get _textColor => Theme.of(context).colorScheme.onSurface;
   Color get _subTextColor => _textColor.withOpacity(0.7);
@@ -482,119 +470,6 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
       _serverAddresses = [];
       _currentAddressId = null;
     }
-
-    // 仅首次进入用持久化值初始化输入框；之后不再覆盖，避免用户编辑途中被外部刷新冲掉。
-    if (!_userAgentInitialized) {
-      _userAgentController.text =
-          _service.currentProfile?.serverUserAgent ?? 'NipaPlay/1.0';
-      _userAgentInitialized = true;
-    }
-  }
-
-  @override
-  void dispose() {
-    _userAgentController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _saveServerUserAgent() async {
-    if (_isSavingUserAgent) return;
-    setState(() => _isSavingUserAgent = true);
-    try {
-      final saved =
-          await _service.updateServerUserAgent(_userAgentController.text);
-      if (!mounted) return;
-      if (saved) {
-        _userAgentController.text =
-            _service.currentProfile?.serverUserAgent ?? 'NipaPlay/1.0';
-        BlurSnackBar.show(context, '已保存连接 User-Agent，后续请求立即生效');
-      } else {
-        BlurSnackBar.show(context, '未连接到服务器，无法保存');
-      }
-    } catch (e) {
-      if (mounted) BlurSnackBar.show(context, '保存失败：$e');
-    } finally {
-      if (mounted) setState(() => _isSavingUserAgent = false);
-    }
-  }
-
-  Widget _buildUserAgentSection() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _panelColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _borderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _accentColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.badge_outlined, color: _accentColor, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '连接 User-Agent',
-                  style: TextStyle(
-                      color: _textColor,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '用于连接该服务器的请求（浏览 / 重连等）的 User-Agent。默认 NipaPlay/1.0；'
-            '若服务器位于按 UA 过滤的 WAF/CDN 之后，可改成受支持的值。'
-            '（首次添加时的服务器识别始终用默认值。）保存后对后续请求立即生效。',
-            style: TextStyle(color: _subTextColor, fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _userAgentController,
-            cursorColor: _accentColor,
-            style: TextStyle(color: _textColor),
-            decoration: InputDecoration(
-              hintText: 'NipaPlay/1.0',
-              hintStyle: TextStyle(color: _mutedTextColor),
-              isDense: true,
-              filled: true,
-              fillColor: _surfaceColor,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: _borderColor),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: _borderColor),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: _accentColor, width: 2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              style: _plainButtonStyle(),
-              onPressed: _isSavingUserAgent ? null : _saveServerUserAgent,
-              child: Text(_isSavingUserAgent ? '保存中…' : '保存'),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   void _loadMultiAddressInfo() {
@@ -834,8 +709,6 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
                 children: [
                   _buildServerInfo(),
                   SizedBox(height: 20),
-                  _buildUserAgentSection(),
-                  SizedBox(height: 20),
                   if (_serverAddresses.isNotEmpty) ...[
                     MultiAddressManagerWidget(
                       addresses: _serverAddresses,
@@ -878,8 +751,6 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
         _buildHeader(),
         SizedBox(height: 20),
         _buildServerInfo(),
-        SizedBox(height: 20),
-        _buildUserAgentSection(),
         SizedBox(height: 20),
         if (_serverAddresses.isNotEmpty) ...[
           MultiAddressManagerWidget(

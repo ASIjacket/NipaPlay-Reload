@@ -9,6 +9,7 @@ import 'package:nipaplay/providers/jellyfin_provider.dart';
 import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/providers/dandanplay_remote_provider.dart';
 import 'package:nipaplay/services/media_server_device_id_service.dart';
+import 'package:nipaplay/services/media_server_service_base.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_server_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
@@ -32,11 +33,41 @@ class RemoteMediaLibraryPage extends StatefulWidget {
 
 class _RemoteMediaLibraryPageState extends State<RemoteMediaLibraryPage> {
   Future<_MediaServerDeviceIdInfo>? _deviceIdInfoFuture;
+  // 全局连接 User-Agent（所有 Emby/Jellyfin 服务器共用）
+  final TextEditingController _connectionUaController = TextEditingController();
+  bool _isSavingConnectionUa = false;
 
   @override
   void initState() {
     super.initState();
     _deviceIdInfoFuture = _loadDeviceIdInfo();
+    _loadConnectionUserAgent();
+  }
+
+  @override
+  void dispose() {
+    _connectionUaController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadConnectionUserAgent() async {
+    final ua = await MediaServerServiceBase.getStoredConnectionUserAgent();
+    if (!mounted) return;
+    setState(() => _connectionUaController.text = ua);
+  }
+
+  Future<void> _saveConnectionUserAgent() async {
+    if (_isSavingConnectionUa) return;
+    setState(() => _isSavingConnectionUa = true);
+    try {
+      final sanitized = await MediaServerServiceBase.saveConnectionUserAgent(
+          _connectionUaController.text);
+      if (!mounted) return;
+      setState(() => _connectionUaController.text = sanitized);
+      BlurSnackBar.show(context, '已保存连接 User-Agent，对后续请求立即生效');
+    } finally {
+      if (mounted) setState(() => _isSavingConnectionUa = false);
+    }
   }
 
   static String _clientPlatformLabel() {
@@ -173,6 +204,11 @@ class _RemoteMediaLibraryPageState extends State<RemoteMediaLibraryPage> {
 
             // 其他远程媒体库服务 (预留)
             _buildRemoteSectionCard(_buildOtherServicesSection()),
+
+            SizedBox(height: 20),
+
+            // 连接 User-Agent（Jellyfin/Emby，全局）
+            _buildRemoteSectionCard(_buildConnectionUserAgentSection()),
 
             SizedBox(height: 20),
 
@@ -576,6 +612,74 @@ class _RemoteMediaLibraryPageState extends State<RemoteMediaLibraryPage> {
             ],
           ),
         ],
+      ],
+    );
+  }
+
+  Widget _buildConnectionUserAgentSection() {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.badge_outlined, color: colorScheme.onSurface),
+            const SizedBox(width: 12),
+            Text(
+              '连接 User-Agent（Jellyfin/Emby）',
+              locale: const Locale("zh-Hans", "zh"),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '连接 Emby/Jellyfin 服务器（登录 / 浏览）所发请求的 User-Agent，所有服务器共用。'
+          '默认 NipaPlay/1.0；若服务器位于按 UA 过滤的 WAF/CDN 之后，可改成受支持的值。'
+          '留空表示使用默认值，保存后对后续请求立即生效。',
+          locale: const Locale("zh-Hans", "zh"),
+          style: TextStyle(
+            color: colorScheme.onSurface.withOpacity(0.7),
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _connectionUaController,
+          cursorColor: AppAccentColors.current,
+          maxLines: 1,
+          style: TextStyle(color: colorScheme.onSurface),
+          decoration: InputDecoration(
+            hintText: 'NipaPlay/1.0',
+            hintStyle:
+                TextStyle(color: colorScheme.onSurface.withOpacity(0.4)),
+            isDense: true,
+            filled: true,
+            fillColor: colorScheme.onSurface.withOpacity(0.06),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: colorScheme.onSurface.withOpacity(0.2)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: colorScheme.onSurface.withOpacity(0.2)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: AppAccentColors.current, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildGlassButton(
+          onPressed: _isSavingConnectionUa ? null : _saveConnectionUserAgent,
+          icon: Icons.check,
+          label: _isSavingConnectionUa ? '保存中…' : '保存',
+        ),
       ],
     );
   }

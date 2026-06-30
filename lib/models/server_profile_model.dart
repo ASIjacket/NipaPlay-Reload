@@ -7,7 +7,6 @@ class ServerProfile {
   final String serverType; // 服务器类型: emby, jellyfin
   final List<ServerAddress> addresses; // 多个地址列表
   final String username; // 用户名
-  final String serverUserAgent; // 该服务器 API 请求使用的 User-Agent（默认 NipaPlay/1.0）
   final String? serverId; // 远程服务器ID（Emby/Jellyfin服务器的唯一标识）
   String? accessToken; // 访问令牌
   String? userId; // 用户ID
@@ -20,7 +19,6 @@ class ServerProfile {
     required this.serverType,
     required this.addresses,
     required this.username,
-    this.serverUserAgent = 'NipaPlay/1.0',
     this.serverId,
     this.accessToken,
     this.userId,
@@ -115,7 +113,6 @@ class ServerProfile {
     String? serverType,
     List<ServerAddress>? addresses,
     String? username,
-    String? serverUserAgent,
     String? serverId,
     String? accessToken,
     String? userId,
@@ -128,7 +125,6 @@ class ServerProfile {
       serverType: serverType ?? this.serverType,
       addresses: addresses ?? this.addresses,
       username: username ?? this.username,
-      serverUserAgent: serverUserAgent ?? this.serverUserAgent,
       serverId: serverId ?? this.serverId,
       accessToken: accessToken ?? this.accessToken,
       userId: userId ?? this.userId,
@@ -144,7 +140,6 @@ class ServerProfile {
       'serverType': serverType,
       'addresses': addresses.map((addr) => addr.toJson()).toList(),
       'username': username,
-      'serverUserAgent': serverUserAgent,
       'serverId': serverId,
       'accessToken': accessToken,
       'userId': userId,
@@ -162,7 +157,6 @@ class ServerProfile {
           .map((addr) => ServerAddress.fromJson(addr))
           .toList(),
       username: json['username'],
-      serverUserAgent: json['serverUserAgent'] ?? 'NipaPlay/1.0',
       serverId: json['serverId'],
       accessToken: json['accessToken'],
       userId: json['userId'],
