@@ -9,28 +9,49 @@ void main() {
   test('saving a player User-Agent sanitizes and applies it immediately',
       () async {
     SharedPreferences.setMockInitialValues({
-      SettingsKeys.playerCustomUserAgent: '  PersistedClient/1.0\r\nInjected  ',
+      SettingsKeys.legacyPlayerCustomUserAgent:
+          '  PersistedClient/1.0\r\nInjected  ',
     });
-    await PlayerFactory.initialize();
     addTearDown(() async {
-      await PlayerFactory.saveCustomUserAgent('');
+      await PlayerFactory.saveCustomPlayerUA('');
+      await PlayerFactory.saveHttpProxy('');
       SharedPreferences.setMockInitialValues({});
     });
-    expect(PlayerFactory.getCustomUserAgent(), 'PersistedClient/1.0Injected');
-    final kernelChanged = PlayerFactory.onKernelChanged.first;
+    await PlayerFactory.initialize();
+    expect(PlayerFactory.getCustomPlayerUA(), 'PersistedClient/1.0Injected');
+    var preferences = await SharedPreferences.getInstance();
+    expect(
+      preferences.getString(SettingsKeys.customPlayerUA),
+      'PersistedClient/1.0Injected',
+    );
+    final userAgentKernelChanged = PlayerFactory.onKernelChanged.first;
 
-    await PlayerFactory.saveCustomUserAgent(
+    await PlayerFactory.saveCustomPlayerUA(
       '  PlayerClient/5.0\r\nInjected  ',
     );
 
-    expect(PlayerFactory.getCustomUserAgent(), 'PlayerClient/5.0Injected');
-    final preferences = await SharedPreferences.getInstance();
+    expect(PlayerFactory.getCustomPlayerUA(), 'PlayerClient/5.0Injected');
+    preferences = await SharedPreferences.getInstance();
     expect(
-      preferences.getString(SettingsKeys.playerCustomUserAgent),
+      preferences.getString(SettingsKeys.customPlayerUA),
       'PlayerClient/5.0Injected',
     );
     expect(
-      await kernelChanged.timeout(const Duration(seconds: 1)),
+      await userAgentKernelChanged.timeout(const Duration(seconds: 1)),
+      PlayerKernelType.mdk,
+    );
+
+    final proxyKernelChanged = PlayerFactory.onKernelChanged.first;
+    await PlayerFactory.saveHttpProxy('  http://127.0.0.1:8000  ');
+
+    expect(PlayerFactory.getHttpProxy(), 'http://127.0.0.1:8000');
+    preferences = await SharedPreferences.getInstance();
+    expect(
+      preferences.getString(SettingsKeys.playerHttpProxy),
+      'http://127.0.0.1:8000',
+    );
+    expect(
+      await proxyKernelChanged.timeout(const Duration(seconds: 1)),
       PlayerKernelType.mdk,
     );
   });

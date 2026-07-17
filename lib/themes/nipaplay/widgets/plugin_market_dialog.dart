@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart' as cupertino;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:kmbal_ionicons/kmbal_ionicons.dart';
@@ -7,9 +8,14 @@ import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:nipaplay/providers/settings_provider.dart';
 import 'package:nipaplay/plugins/plugin_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/nipaplay_window.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/widgets/adaptive_markdown.dart';
+import 'package:nipaplay/app/app_display_surface.dart';
+import 'package:nipaplay/app/app_display_surface_scope.dart';
+import 'package:nipaplay/media_library/adaptive_media_library_primitives.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/utils/github_accel_resolver.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
@@ -29,9 +35,20 @@ const String _repoBaseUrlForProxy =
 const String _readmeBaseUrl = '$_repoBaseUrl/plugins';
 
 class PluginMarketDialog extends StatefulWidget {
-  const PluginMarketDialog({super.key});
+  const PluginMarketDialog({super.key, this.embedded = false});
+
+  final bool embedded;
 
   static Future<void> show(BuildContext context) {
+    if (AppDisplaySurfaceScope.of(context) == AppDisplaySurface.phone) {
+      return CupertinoBottomSheet.show<void>(
+        context: context,
+        title: '插件市场',
+        floatingTitle: true,
+        child: const PluginMarketDialog(embedded: true),
+      );
+    }
+
     final enableAnimation = Provider.of<AppearanceSettingsProvider>(
       context,
       listen: false,
@@ -53,9 +70,11 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
   static Color get _accentColor => AppAccentColors.current;
 
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
 
-  Future<String> _applyProxyIfNeeded(String rawUrl, String proxyUrl, String? proxy) async {
+  Future<String> _applyProxyIfNeeded(
+      String rawUrl, String proxyUrl, String? proxy) async {
     if (proxy == null || proxy.trim().isEmpty) {
       return await GithubAccelResolver.resolveFirstReachable(rawUrl) ?? rawUrl;
     }
@@ -81,7 +100,6 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
     super.initState();
     _loadAppVersion();
     _loadPlugins();
-    _searchController.addListener(_onSearchChanged);
   }
 
   Future<void> _loadAppVersion() async {
@@ -96,6 +114,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -151,6 +170,14 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
     }
   }
 
+  Future<void> _refreshPlugins() async {
+    if (_isLoading || _isRefreshing) return;
+    setState(() {
+      _isRefreshing = true;
+    });
+    await _loadPlugins();
+  }
+
   void _onSearchChanged() {
     final query = _searchController.text.toLowerCase().trim();
     if (query.isEmpty) {
@@ -191,8 +218,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
   }
 
   void _syncInstalledStatus() {
-    final pluginService =
-        Provider.of<PluginService>(context, listen: false);
+    final pluginService = Provider.of<PluginService>(context, listen: false);
     final index = pluginService.pluginIndex;
 
     // 构建 remoteId → (localId, version) 的映射，支持前缀匹配
@@ -229,8 +255,10 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
         Provider.of<SettingsProvider>(context, listen: false);
     final proxyUrl = settingsProvider.githubProxyUrl;
     final rawReadmeUrl = '$_readmeBaseUrl/${plugin.id}/README.md';
-    final proxyReadmeUrl = '${_repoBaseUrlForProxy}/plugins/${plugin.id}/README.md';
-    final url = await _applyProxyIfNeeded(rawReadmeUrl, proxyReadmeUrl, proxyUrl);
+    final proxyReadmeUrl =
+        '$_repoBaseUrlForProxy/plugins/${plugin.id}/README.md';
+    final url =
+        await _applyProxyIfNeeded(rawReadmeUrl, proxyReadmeUrl, proxyUrl);
 
     try {
       final response = await http.get(Uri.parse(url));
@@ -285,32 +313,55 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
       final url = await _applyProxyIfNeeded(
           plugin.downloadUrl, plugin.proxyDownloadUrl, proxyUrl);
       final response = await http.get(Uri.parse(url));
+      if (!mounted) return;
       if (response.statusCode == 200) {
-        if (!mounted) return;
         final pluginService =
             Provider.of<PluginService>(context, listen: false);
         final wasInstalled = plugin.isInstalled;
         await pluginService.importPluginFromContent(response.body,
             updateForId: plugin.localId);
+        if (!mounted) return;
         plugin.isInstalled = true;
         plugin.localVersion = plugin.version;
         plugin.localId = plugin.id;
-        BlurSnackBar.show(
-            context, wasInstalled ? '插件更新成功' : '插件安装成功');
+        BlurSnackBar.show(context, wasInstalled ? '插件更新成功' : '插件安装成功');
       } else {
         BlurSnackBar.show(context, '下载插件失败: ${response.statusCode}');
       }
     } catch (e) {
+      if (!mounted) return;
       BlurSnackBar.show(context, '安装错误: $e');
     } finally {
-      setState(() {
-        plugin.isInstalling = false;
-      });
+      if (mounted) {
+        setState(() {
+          plugin.isInstalling = false;
+        });
+      }
     }
   }
 
   Widget _buildHeader(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (widget.embedded) {
+      final topInset =
+          CupertinoBottomSheetScope.maybeOf(context)?.contentTopInset ?? 0;
+      return Padding(
+        padding: EdgeInsets.fromLTRB(20, topInset + 8, 20, 12),
+        child: Row(
+          children: [
+            Expanded(child: _buildSearchBar(context)),
+            const SizedBox(width: 8),
+            AdaptiveMediaIconButton(
+              desktopIcon: Ionicons.refresh_outline,
+              phoneIcon: cupertino.CupertinoIcons.refresh,
+              tooltip: '刷新',
+              onPressed:
+                  _isLoading || _isRefreshing ? null : () => _refreshPlugins(),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
@@ -319,7 +370,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
         children: [
           Row(
             children: [
-              Icon(Ionicons.storefront_outline, size: 28),
+              const Icon(Ionicons.storefront_outline, size: 28),
               const SizedBox(width: 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,12 +393,22 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
                 ],
               ),
               const Spacer(),
-              IconButton(
-                icon: _isRefreshing
-                    ? const CircularProgressIndicator(strokeWidth: 2)
-                    : Icon(Ionicons.refresh_outline),
-                onPressed: _loadPlugins,
-                tooltip: '刷新',
+              Tooltip(
+                message: '刷新',
+                child: HoverScaleTextButton(
+                  onPressed: _isLoading || _isRefreshing
+                      ? null
+                      : () => _refreshPlugins(),
+                  padding: const EdgeInsets.all(8),
+                  hoverScale: 1.16,
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: _isRefreshing
+                        ? const AdaptiveMediaActivityIndicator(size: 20)
+                        : const Icon(Ionicons.refresh_outline, size: 24),
+                  ),
+                ),
               ),
             ],
           ),
@@ -359,35 +420,17 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
   }
 
   Widget _buildSearchBar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E1E1E) : Colors.grey[100],
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDark ? const Color(0xFF3A3A3A) : Colors.grey[200]!,
-        ),
-      ),
-      child: TextField(
-        controller: _searchController,
-        decoration: InputDecoration(
-          prefixIcon: Icon(Ionicons.search_outline, color: Colors.grey[400]),
-          hintText: '搜索插件',
-          hintStyle: TextStyle(color: Colors.grey[400]),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 12),
-        ),
-        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-      ),
+    return AdaptiveMediaSearchField(
+      controller: _searchController,
+      focusNode: _searchFocusNode,
+      placeholder: '搜索插件',
+      onChanged: (_) => _onSearchChanged(),
     );
   }
 
   Widget _buildContent(BuildContext context) {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: AdaptiveMediaActivityIndicator());
     }
 
     if (_errorMessage != null) {
@@ -395,7 +438,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Ionicons.cloud_outline, size: 48, color: Colors.grey),
+            const Icon(Ionicons.cloud_outline, size: 48, color: Colors.grey),
             const SizedBox(height: 16),
             Text(
               _errorMessage!,
@@ -403,9 +446,11 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
-            ElevatedButton(
+            HoverScaleTextButton(
+              text: '重新加载',
               onPressed: _loadPlugins,
-              child: const Text('重新加载'),
+              idleColor: _accentColor,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             ),
           ],
         ),
@@ -417,7 +462,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Ionicons.search_outline, size: 48, color: Colors.grey),
+            const Icon(Ionicons.search_outline, size: 48, color: Colors.grey),
             const SizedBox(height: 16),
             Text(
               _searchController.text.isNotEmpty ? '未找到匹配的插件' : '暂无插件',
@@ -602,10 +647,18 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
             const SizedBox(height: 12),
             Row(
               children: [
-                TextButton.icon(
+                HoverScaleTextButton(
                   onPressed: () => _showPluginReadme(plugin),
-                  icon: Icon(Ionicons.document_outline, size: 16),
-                  label: const Text('查看文档'),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Ionicons.document_outline, size: 16),
+                      SizedBox(width: 6),
+                      Text('查看文档'),
+                    ],
+                  ),
                 ),
                 const Spacer(),
                 _buildActionButtons(plugin),
@@ -624,7 +677,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
       return const SizedBox(
         width: 24,
         height: 24,
-        child: CircularProgressIndicator(strokeWidth: 2),
+        child: AdaptiveMediaActivityIndicator(size: 20),
       );
     }
 
@@ -632,53 +685,36 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
       final hasUpdate = plugin.localVersion != null &&
           _compareVersions(plugin.version, plugin.localVersion!) > 0;
       if (hasUpdate) {
-        return ElevatedButton(
+        return HoverScaleTextButton(
+          text: '更新',
           onPressed: () => _installPlugin(plugin),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _accentColor,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-          child: const Text('更新'),
+          idleColor: _accentColor,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         );
       }
-      return TextButton(
+      return HoverScaleTextButton(
+        text: '已安装',
         onPressed: () {
           BlurSnackBar.show(context, '该插件已安装');
         },
-        child: const Text('已安装'),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       );
     }
 
     if (!isVersionCompatible) {
-      return ElevatedButton(
+      return HoverScaleTextButton(
+        text: '版本不兼容',
         onPressed: null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.grey[600],
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-        ),
-        child: const Text('版本不兼容'),
+        idleColor: Colors.grey[600],
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       );
     }
 
-    return ElevatedButton(
+    return HoverScaleTextButton(
+      text: '安装',
       onPressed: () => _installPlugin(plugin),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: _accentColor,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
-      ),
-      child: const Text('安装'),
+      idleColor: _accentColor,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
     );
   }
 
@@ -691,9 +727,11 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
           child: Row(
             children: [
-              IconButton(
-                icon: Icon(Ionicons.chevron_back_outline),
+              HoverScaleTextButton(
                 onPressed: _closeReadme,
+                padding: const EdgeInsets.all(8),
+                hoverScale: 1.16,
+                child: const Icon(Ionicons.chevron_back_outline, size: 24),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -726,7 +764,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: _isLoadingReadme
-                ? const Center(child: CircularProgressIndicator())
+                ? const Center(child: AdaptiveMediaActivityIndicator())
                 : _readmeContent != null
                     ? SingleChildScrollView(
                         child: AdaptiveMarkdown(
@@ -754,6 +792,7 @@ class _PluginMarketDialogState extends State<PluginMarketDialog> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return NipaplayWindowScaffold(
+      embedded: widget.embedded,
       maxWidth: 800,
       maxHeightFactor: 0.85,
       backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,

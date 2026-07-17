@@ -7,6 +7,38 @@ import './player_data_models.dart';
 import 'dart:async';
 import 'package:nipaplay/utils/subtitle_font_loader.dart';
 
+@visibleForTesting
+const List<String> mdkUserAgentPropertyKeys = [
+  'avformat.user_agent',
+  'avio.user_agent',
+];
+
+@visibleForTesting
+const List<String> mdkHttpProxyPropertyKeys = [
+  'avformat.http_proxy',
+  'avio.http_proxy',
+];
+
+@visibleForTesting
+void applyMdkUserAgentProperties(
+  void Function(String key, String value) setter,
+  String userAgent,
+) {
+  for (final key in mdkUserAgentPropertyKeys) {
+    setter(key, userAgent);
+  }
+}
+
+@visibleForTesting
+void applyMdkHttpProxyProperties(
+  void Function(String key, String value) setter,
+  String httpProxy,
+) {
+  for (final key in mdkHttpProxyPropertyKeys) {
+    setter(key, httpProxy);
+  }
+}
+
 // Enum Converters
 PlayerPlaybackState _toPlayerPlaybackState(mdk.PlaybackState state) {
   if (state == mdk.PlaybackState.stopped) return PlayerPlaybackState.stopped;
@@ -56,7 +88,8 @@ mdk.MediaType _fromPlayerMediaType(PlayerMediaType type) {
   }
 }
 
-PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo, {int internalAudioTrackCount = 0}) {
+PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo,
+    {int internalAudioTrackCount = 0}) {
   return PlayerMediaInfo(
     duration: mdkInfo.duration,
     video: mdkInfo.video?.map((v) {
@@ -161,7 +194,8 @@ PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo, {int internalAudioTrac
         language: language ?? 'unknown',
         metadata: metadata,
         rawRepresentation: rawRepresentation,
-        isExternal: internalAudioTrackCount > 0 && trackIndex >= internalAudioTrackCount,
+        isExternal: internalAudioTrackCount > 0 &&
+            trackIndex >= internalAudioTrackCount,
       );
     }).toList(),
   );
@@ -241,13 +275,11 @@ class MdkPlayerAdapter implements AbstractPlayer {
   /// 默认 UA 为 `Lavf/...`，部分 WAF/CDN 会因此拦截，可在播放器设置中覆盖。
   void _applyNetworkOptions() {
     if (_userAgent.isNotEmpty) {
-      _setStickyProperty('avformat.user_agent', _userAgent);
-      _setStickyProperty('avio.user_agent', _userAgent);
+      applyMdkUserAgentProperties(_setStickyProperty, _userAgent);
       debugPrint('MDK: 网络流 User-Agent = $_userAgent');
     }
     if (_httpProxy.isNotEmpty) {
-      _setStickyProperty('avformat.http_proxy', _httpProxy);
-      _setStickyProperty('avio.http_proxy', _httpProxy);
+      applyMdkHttpProxyProperties(_setStickyProperty, _httpProxy);
       debugPrint('MDK: 网络流 HTTP 代理 = $_httpProxy');
     }
   }
@@ -369,7 +401,8 @@ class MdkPlayerAdapter implements AbstractPlayer {
   }
 
   @override
-  PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo, internalAudioTrackCount: _internalAudioTrackCount);
+  PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo,
+      internalAudioTrackCount: _internalAudioTrackCount);
 
   @override
   List<int> get activeSubtitleTracks => _mdkPlayer.activeSubtitleTracks;
@@ -527,6 +560,13 @@ class MdkPlayerAdapter implements AbstractPlayer {
         return _activeAudioDecoder;
     }
     return _mdkPlayer.getProperty(key);
+  }
+
+  @override
+  void setUserAgent(String ua) {
+    if (ua.isEmpty) return;
+    applyMdkUserAgentProperties(setProperty, ua);
+    debugPrint('MDK: 已设置自定义 user-agent: $ua');
   }
 
   @override

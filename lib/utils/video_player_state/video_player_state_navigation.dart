@@ -128,6 +128,7 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
                 resolvedHistory.filePath,
                 historyItem: resolvedHistory,
                 playbackSession: playbackSession,
+                playbackDetailContext: _playbackDetailContext,
               );
             } catch (e) {
               debugPrint('[上一话] 获取Jellyfin播放会话失败: $e');
@@ -154,6 +155,7 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
                 resolvedHistory.filePath,
                 historyItem: resolvedHistory,
                 playbackSession: playbackSession,
+                playbackDetailContext: _playbackDetailContext,
               );
             } catch (e) {
               debugPrint('[上一话] 获取Emby播放会话失败: $e');
@@ -162,8 +164,11 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
             }
           } else {
             // 本地文件或其他类型
-            await initializePlayer(resolvedHistory.filePath,
-                historyItem: resolvedHistory);
+            await initializePlayer(
+              resolvedHistory.filePath,
+              historyItem: resolvedHistory,
+              playbackDetailContext: _playbackDetailContext,
+            );
           }
         } else {
           _showEpisodeErrorMessage('上一话', '无法加载上一话的历史记录');
@@ -298,6 +303,7 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
                 resolvedHistory.filePath,
                 historyItem: resolvedHistory,
                 playbackSession: playbackSession,
+                playbackDetailContext: _playbackDetailContext,
               );
             } catch (e) {
               debugPrint('[下一话] 获取Jellyfin播放会话失败: $e');
@@ -324,6 +330,7 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
                 resolvedHistory.filePath,
                 historyItem: resolvedHistory,
                 playbackSession: playbackSession,
+                playbackDetailContext: _playbackDetailContext,
               );
             } catch (e) {
               debugPrint('[下一话] 获取Emby播放会话失败: $e');
@@ -332,8 +339,11 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
             }
           } else {
             // 本地文件或其他类型
-            await initializePlayer(resolvedHistory.filePath,
-                historyItem: resolvedHistory);
+            await initializePlayer(
+              resolvedHistory.filePath,
+              historyItem: resolvedHistory,
+              playbackDetailContext: _playbackDetailContext,
+            );
           }
         } else {
           _showEpisodeErrorMessage('下一话', '无法加载下一话的历史记录');
@@ -439,18 +449,17 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
   }
 
   Widget _buildEpisodeNavigationDialogContent() {
-    final isCupertinoTheme = _context != null && _context!.mounted
-        ? Provider.of<UIThemeProvider>(_context!, listen: false)
-            .isCupertinoTheme
+    final isPhoneLayout = _context != null && _context!.mounted
+        ? Provider.of<UIThemeProvider>(_context!, listen: false).isPhoneLayout
         : false;
 
-    final Widget indicator = isCupertinoTheme
+    final Widget indicator = isPhoneLayout
         ? const CupertinoActivityIndicator(radius: 12)
         : const CircularProgressIndicator(
             valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
           );
 
-    final TextStyle textStyle = isCupertinoTheme
+    final TextStyle textStyle = isPhoneLayout
         ? const TextStyle(
             color: CupertinoColors.secondaryLabel,
             fontSize: 14,
@@ -582,7 +591,12 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
                     0.0001) {
               unawaited(applySubtitleStylePreference());
             }
-            _progress = _position.inMilliseconds / _duration.inMilliseconds;
+            // duration 为 0 时（iOS 流媒体 duration 延迟就绪/解析失败）避免除零
+            // 产生 Infinity/NaN，否则会落库到 watchProgress 导致全量备份
+            // JSON 编码失败（"Converting object to an encoding object failed: Infinity"）
+            _progress = _duration.inMilliseconds > 0
+                ? _position.inMilliseconds / _duration.inMilliseconds
+                : 0.0;
             final bufferedMs = player.bufferedPosition;
             _bufferedPositionMs = bufferedMs <= 0
                 ? 0

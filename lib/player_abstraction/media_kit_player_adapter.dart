@@ -14,6 +14,20 @@ import './abstract_player.dart';
 import './player_enums.dart';
 import './player_data_models.dart';
 
+@visibleForTesting
+void applyMediaKitNetworkOptions(
+  void Function(String key, String value) setter, {
+  required String userAgent,
+  required String httpProxy,
+}) {
+  if (userAgent.isNotEmpty) {
+    setter('user-agent', userAgent);
+  }
+  if (httpProxy.isNotEmpty) {
+    setter('http-proxy', httpProxy);
+  }
+}
+
 /// MediaKit播放器适配器
 class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
   static bool _disableMpvLogs = false;
@@ -372,12 +386,15 @@ class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
   /// 通过 mpv 的 user-agent / http-proxy 选项设置，跨重定向后仍会携带。
   /// 默认 UA 为 `libmpv`，部分 WAF/CDN 会因此拦截，可在播放器设置中覆盖。
   void _applyNetworkOptions() {
+    applyMediaKitNetworkOptions(
+      _setMpvPropertyOption,
+      userAgent: _userAgent,
+      httpProxy: _httpProxy,
+    );
     if (_userAgent.isNotEmpty) {
-      _setMpvPropertyOption('user-agent', _userAgent);
       debugPrint('MediaKit: 网络流 User-Agent = $_userAgent');
     }
     if (_httpProxy.isNotEmpty) {
-      _setMpvPropertyOption('http-proxy', _httpProxy);
       debugPrint('MediaKit: 网络流 HTTP 代理 = $_httpProxy');
     }
   }
@@ -2452,6 +2469,19 @@ class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
   @override
   String? getProperty(String name) {
     return _properties[name];
+  }
+
+  @override
+  void setUserAgent(String ua) {
+    if (ua.isEmpty) return;
+    try {
+      // mpv 的 user-agent 属性，对所有 HTTP 请求生效。须在打开媒体前设置。
+      unawaited((_player.platform as dynamic).setProperty('user-agent', ua));
+      _properties['user-agent'] = ua;
+      debugPrint('MediaKit: 已设置自定义 user-agent: $ua');
+    } catch (e) {
+      debugPrint('MediaKit: 设置 user-agent 失败: $e');
+    }
   }
 
   @override

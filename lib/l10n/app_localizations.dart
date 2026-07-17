@@ -135,6 +135,294 @@ abstract class AppLocalizations {
   /// **'个人中心'**
   String get tabAccount;
 
+  /// No description provided for @tabDanmakuConsole.
+  ///
+  /// In zh, this message translates to:
+  /// **'弹幕控制台'**
+  String get tabDanmakuConsole;
+
+  /// No description provided for @externalPlayerConsoleTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'外部播放器弹幕控制台'**
+  String get externalPlayerConsoleTitle;
+
+  /// No description provided for @externalPlayerConsoleEmptyTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'尚未启动外部播放器'**
+  String get externalPlayerConsoleEmptyTitle;
+
+  /// No description provided for @externalPlayerConsoleEmptyDescription.
+  ///
+  /// In zh, this message translates to:
+  /// **'通过外部播放器开始播放后，会话信息和控制操作将显示在这里。'**
+  String get externalPlayerConsoleEmptyDescription;
+
+  /// No description provided for @externalPlayerConsoleAnime.
+  ///
+  /// In zh, this message translates to:
+  /// **'番剧'**
+  String get externalPlayerConsoleAnime;
+
+  /// No description provided for @externalPlayerConsoleEpisode.
+  ///
+  /// In zh, this message translates to:
+  /// **'剧集'**
+  String get externalPlayerConsoleEpisode;
+
+  /// No description provided for @externalPlayerConsoleEpisodeId.
+  ///
+  /// In zh, this message translates to:
+  /// **'剧集 ID'**
+  String get externalPlayerConsoleEpisodeId;
+
+  /// No description provided for @externalPlayerConsoleProcessId.
+  ///
+  /// In zh, this message translates to:
+  /// **'播放器 PID'**
+  String get externalPlayerConsoleProcessId;
+
+  /// No description provided for @externalPlayerConsoleMediaPath.
+  ///
+  /// In zh, this message translates to:
+  /// **'媒体路径'**
+  String get externalPlayerConsoleMediaPath;
+
+  /// No description provided for @externalPlayerConsoleUnknownAnime.
+  ///
+  /// In zh, this message translates to:
+  /// **'未知番剧'**
+  String get externalPlayerConsoleUnknownAnime;
+
+  /// No description provided for @externalPlayerConsoleUnknownEpisode.
+  ///
+  /// In zh, this message translates to:
+  /// **'未知剧集'**
+  String get externalPlayerConsoleUnknownEpisode;
+
+  /// No description provided for @externalPlayerConsoleProgress.
+  ///
+  /// In zh, this message translates to:
+  /// **'播放进度'**
+  String get externalPlayerConsoleProgress;
+
+  /// No description provided for @externalPlayerConsoleProgressUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前播放器暂不支持进度同步。'**
+  String get externalPlayerConsoleProgressUnsupported;
+
+  /// No description provided for @externalPlayerConsoleProgressLoading.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在获取播放进度…'**
+  String get externalPlayerConsoleProgressLoading;
+
+  /// No description provided for @externalPlayerConsoleTimestampLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'精确时间戳'**
+  String get externalPlayerConsoleTimestampLabel;
+
+  /// No description provided for @externalPlayerConsoleTimestampHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'时:分:秒 / 分:秒 / 秒数'**
+  String get externalPlayerConsoleTimestampHint;
+
+  /// No description provided for @externalPlayerConsoleTimestampInvalid.
+  ///
+  /// In zh, this message translates to:
+  /// **'请输入有效的时间戳'**
+  String get externalPlayerConsoleTimestampInvalid;
+
+  /// No description provided for @externalPlayerConsoleTimestampSeek.
+  ///
+  /// In zh, this message translates to:
+  /// **'精确跳转'**
+  String get externalPlayerConsoleTimestampSeek;
+
+  /// No description provided for @externalPlayerConsoleDanmakuList.
+  ///
+  /// In zh, this message translates to:
+  /// **'弹幕列表'**
+  String get externalPlayerConsoleDanmakuList;
+
+  /// No description provided for @externalPlayerConsoleDanmakuStats.
+  ///
+  /// In zh, this message translates to:
+  /// **'共 {total} 条，正在显示 {active} 条'**
+  String externalPlayerConsoleDanmakuStats(int total, int active);
+
+  /// No description provided for @externalPlayerConsoleDanmakuEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'本次播放没有加载弹幕。'**
+  String get externalPlayerConsoleDanmakuEmpty;
+
+  /// No description provided for @externalPlayerConsoleDanmakuUnknownSender.
+  ///
+  /// In zh, this message translates to:
+  /// **'未知'**
+  String get externalPlayerConsoleDanmakuUnknownSender;
+
+  /// No description provided for @externalPlayerConsoleDanmakuSender.
+  ///
+  /// In zh, this message translates to:
+  /// **'发送者'**
+  String get externalPlayerConsoleDanmakuSender;
+
+  /// No description provided for @externalPlayerConsoleDanmakuTypeScroll.
+  ///
+  /// In zh, this message translates to:
+  /// **'滚动'**
+  String get externalPlayerConsoleDanmakuTypeScroll;
+
+  /// No description provided for @externalPlayerConsoleDanmakuTypeTop.
+  ///
+  /// In zh, this message translates to:
+  /// **'顶部'**
+  String get externalPlayerConsoleDanmakuTypeTop;
+
+  /// No description provided for @externalPlayerConsoleDanmakuTypeBottom.
+  ///
+  /// In zh, this message translates to:
+  /// **'底部'**
+  String get externalPlayerConsoleDanmakuTypeBottom;
+
+  /// No description provided for @externalPlayerConsoleDanmakuActive.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在显示'**
+  String get externalPlayerConsoleDanmakuActive;
+
+  /// No description provided for @externalPlayerConsoleDanmakuFollowEnabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在跟随播放'**
+  String get externalPlayerConsoleDanmakuFollowEnabled;
+
+  /// No description provided for @externalPlayerConsoleDanmakuFollowDisabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'已暂停自动跟随'**
+  String get externalPlayerConsoleDanmakuFollowDisabled;
+
+  /// No description provided for @externalPlayerConsoleDanmakuKeywordFilter.
+  ///
+  /// In zh, this message translates to:
+  /// **'弹幕屏蔽规则'**
+  String get externalPlayerConsoleDanmakuKeywordFilter;
+
+  /// No description provided for @externalPlayerConsoleDanmakuKeywordHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'输入规则内容'**
+  String get externalPlayerConsoleDanmakuKeywordHint;
+
+  /// No description provided for @externalPlayerConsoleDanmakuKeywordAdd.
+  ///
+  /// In zh, this message translates to:
+  /// **'添加'**
+  String get externalPlayerConsoleDanmakuKeywordAdd;
+
+  /// No description provided for @externalPlayerConsoleDanmakuBlocked.
+  ///
+  /// In zh, this message translates to:
+  /// **'已被关键词屏蔽'**
+  String get externalPlayerConsoleDanmakuBlocked;
+
+  /// No description provided for @externalPlayerConsoleDanmakuBlockModeKeyword.
+  ///
+  /// In zh, this message translates to:
+  /// **'关键词'**
+  String get externalPlayerConsoleDanmakuBlockModeKeyword;
+
+  /// No description provided for @externalPlayerConsoleDanmakuBlockModeRegex.
+  ///
+  /// In zh, this message translates to:
+  /// **'正则表达式'**
+  String get externalPlayerConsoleDanmakuBlockModeRegex;
+
+  /// No description provided for @externalPlayerConsoleDanmakuBlockModeSender.
+  ///
+  /// In zh, this message translates to:
+  /// **'发送者 ID'**
+  String get externalPlayerConsoleDanmakuBlockModeSender;
+
+  /// No description provided for @externalPlayerConsoleDanmakuBlockInvalid.
+  ///
+  /// In zh, this message translates to:
+  /// **'请输入有效且未重复的规则'**
+  String get externalPlayerConsoleDanmakuBlockInvalid;
+
+  /// No description provided for @externalPlayerConsoleDanmakuBlockRemove.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除规则'**
+  String get externalPlayerConsoleDanmakuBlockRemove;
+
+  /// No description provided for @externalPlayerConsoleDanmakuShow.
+  ///
+  /// In zh, this message translates to:
+  /// **'显示弹幕'**
+  String get externalPlayerConsoleDanmakuShow;
+
+  /// No description provided for @externalPlayerConsoleDanmakuHide.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐藏弹幕'**
+  String get externalPlayerConsoleDanmakuHide;
+
+  /// No description provided for @danmakuOpacityTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'弹幕不透明度'**
+  String get danmakuOpacityTitle;
+
+  /// No description provided for @danmakuOpacitySubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'调整弹幕文字不透明度，新打开的视频将应用此设置。'**
+  String get danmakuOpacitySubtitle;
+
+  /// No description provided for @danmakuOutlineEnabledTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'启用弹幕描边'**
+  String get danmakuOutlineEnabledTitle;
+
+  /// No description provided for @danmakuOutlineEnabledSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'控制是否显示弹幕文字描边，新打开的视频将应用此设置。'**
+  String get danmakuOutlineEnabledSubtitle;
+
+  /// No description provided for @danmakuOutlineWidthTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'弹幕描边粗细'**
+  String get danmakuOutlineWidthTitle;
+
+  /// No description provided for @externalPlayerConsoleResume.
+  ///
+  /// In zh, this message translates to:
+  /// **'继续播放'**
+  String get externalPlayerConsoleResume;
+
+  /// No description provided for @externalPlayerConsolePause.
+  ///
+  /// In zh, this message translates to:
+  /// **'暂停'**
+  String get externalPlayerConsolePause;
+
+  /// No description provided for @externalPlayerConsoleClose.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭播放器'**
+  String get externalPlayerConsoleClose;
+
   /// No description provided for @tabSettings.
   ///
   /// In zh, this message translates to:
@@ -3113,6 +3401,12 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'赞赏码'**
   String get appreciationCode;
+
+  /// No description provided for @appreciationCodeHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'点击查看赞赏码'**
+  String get appreciationCodeHint;
 
   /// No description provided for @appreciationImageLoadFailed.
   ///

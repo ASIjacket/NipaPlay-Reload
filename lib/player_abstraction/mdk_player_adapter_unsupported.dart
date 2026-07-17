@@ -5,9 +5,8 @@ import './player_data_models.dart';
 import 'dart:async';
 
 class MdkPlayerAdapter implements AbstractPlayer {
-  // 参数与 io 实现保持一致，使工厂的统一构造调用在不支持平台也能编译。
   MdkPlayerAdapter({String? userAgent, String? httpProxy});
-  
+
   @override
   double get volume => 1.0;
   @override
@@ -76,7 +75,7 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   void setDecoders(PlayerMediaType type, List<String> decoders) {}
-  
+
   @override
   List<String> getDecoders(PlayerMediaType type) => [];
 
@@ -87,6 +86,9 @@ class MdkPlayerAdapter implements AbstractPlayer {
   void setProperty(String key, String value) {}
 
   @override
+  void setUserAgent(String ua) {}
+
+  @override
   Future<void> setVideoSurfaceSize({int? width, int? height}) async {}
 
   @override
@@ -94,7 +96,7 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   Future<void> playDirectly() async {}
-  
+
   @override
   Future<void> pauseDirectly() async {}
 

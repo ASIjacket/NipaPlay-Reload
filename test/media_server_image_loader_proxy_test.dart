@@ -68,4 +68,20 @@ void main() {
     ]);
     expect(bytes, expectedBytes);
   });
+
+  test('uncompressed detail images use the unified network image loader', () {
+    final widgetSource = File(
+      'lib/themes/nipaplay/widgets/cached_network_image_widget.dart',
+    ).readAsStringSync();
+    final detailSource = File(
+      'lib/pages/media_server_detail_page.dart',
+    ).readAsStringSync();
+
+    expect(detailSource, contains('shouldCompress: false'));
+    expect(widgetSource, isNot(contains('http.get(')));
+    expect(
+      RegExp('loadNetworkImageBytes').allMatches(widgetSource),
+      hasLength(greaterThanOrEqualTo(2)),
+    );
+  });
 }

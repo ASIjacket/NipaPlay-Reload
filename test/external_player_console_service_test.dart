@@ -1,0 +1,982 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:nipaplay/constants/danmaku/mode.dart';
+import 'package:nipaplay/constants/media_extensions.dart';
+import 'package:nipaplay/l10n/app_localizations.dart';
+import 'package:nipaplay/models/danmaku/danmaku_item.dart';
+import 'package:nipaplay/models/external_player_session/linux_session.dart';
+import 'package:nipaplay/models/external_player_session/other_session.dart';
+import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/pages/external_player_console_page.dart';
+import 'package:nipaplay/services/external_player_console_service.dart';
+import 'package:nipaplay/services/external_player_service.dart';
+import 'package:nipaplay/utils/danmaku/assets.dart';
+import 'package:nipaplay/utils/danmaku_ass_converter.dart';
+
+final Expando<DanmakuLaunchAssets> _danmakuAssets =
+    Expando<DanmakuLaunchAssets>();
+
+LinuxSession _session(
+  Process process, {
+  String? ipcPath,
+  String? danmakuAssPath,
+  double danmakuOpacity = 1.0,
+  double danmakuOutlineWidth = 1.0,
+  Duration position = Duration.zero,
+  Duration duration = Duration.zero,
+  bool isPaused = false,
+  List<DanmakuItem> danmakuList = const [],
+  AssExportSettings? danmakuAssSettings,
+}) {
+  return _sessionFromProcessId(
+    process.pid,
+    ipcPath: ipcPath,
+    danmakuAssPath: danmakuAssPath,
+    danmakuOpacity: danmakuOpacity,
+    danmakuOutlineWidth: danmakuOutlineWidth,
+    position: position,
+    duration: duration,
+    isPaused: isPaused,
+    danmakuList: danmakuList,
+    danmakuAssSettings: danmakuAssSettings,
+    monitorProcess: true,
+  );
+}
+
+LinuxSession _sessionFromProcessId(
+  int processId, {
+  String? ipcPath,
+  String? danmakuAssPath,
+  double danmakuOpacity = 1.0,
+  double danmakuOutlineWidth = 1.0,
+  Duration position = Duration.zero,
+  Duration duration = Duration.zero,
+  bool isPaused = false,
+  List<DanmakuItem> danmakuList = const [],
+  AssExportSettings? danmakuAssSettings,
+  bool monitorProcess = false,
+}) {
+  final session = LinuxSession.attach(
+    playerPath: '/bin/mpv',
+    processId: processId,
+    ipcPath: ipcPath,
+    duration: duration,
+    position: position,
+    isPaused: isPaused,
+    monitorProcess: monitorProcess,
+  );
+  if (danmakuAssSettings != null || danmakuList.isNotEmpty) {
+    final assPath = danmakuAssPath ?? '/tmp/nipaplay_test_$processId.ass';
+    _danmakuAssets[session] = DanmakuLaunchAssets(
+      assPath: assPath,
+      luaPath: '$assPath.lua',
+      opacity: danmakuOpacity,
+      outlineWidth: danmakuOutlineWidth,
+      danmakuList: danmakuList,
+      assSettings: danmakuAssSettings ?? const AssExportSettings(fontSize: 30),
+      allowStacking: true,
+    );
+  }
+  return session;
+}
+
+void _showSession(
+  LinuxSession session, {
+  PlayableItem? playableItem,
+}) {
+  ExternalPlayerConsoleService.showSession(
+    session,
+    playableItem: playableItem,
+    danmakuAssets: _danmakuAssets[session],
+  );
+}
+
+Future<Process> _startPlayer({String duration = '30'}) {
+  return Process.start('/bin/sleep', [duration]);
+}
+
+Future<void> _stopProcess(Process process) async {
+  Process.killPid(process.pid, ProcessSignal.sigterm);
+  try {
+    await process.exitCode.timeout(const Duration(seconds: 1));
+  } on TimeoutException {
+    Process.killPid(process.pid, ProcessSignal.sigkill);
+    await process.exitCode;
+  }
+}
+
+Future<void> _waitUntil(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 4),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  fail('Condition was not met within $timeout');
+}
+
+void main() {
+  test('launches a generic Linux player without opening the console', () async {
+    ExternalPlayerConsoleService.closePlayerAndConsole();
+    final session = await ExternalPlayerService.launch(
+      playerPath: '/bin/sleep',
+      mediaPath: '30',
+    );
+    if (session == null) fail('Expected the generic player to start');
+    addTearDown(session.terminate);
+
+    expect(session, isA<OtherSession>());
+    expect(session.type, ExternalPlayerType.generic);
+    expect(session.ipcPath, isNull);
+    ExternalPlayerConsoleService.showSession(session);
+    expect(ExternalPlayerConsoleService.instance.hasActiveSession, isFalse);
+  });
+
+  group('LinuxSession progress', () {
+    test('clamps its fraction to the valid range', () {
+      final session = _sessionFromProcessId(
+        1,
+        position: const Duration(minutes: 25),
+        duration: const Duration(minutes: 20),
+      );
+
+      expect(session.fraction, 1.0);
+    });
+
+    test('has no fraction when duration is unavailable', () {
+      final session = _sessionFromProcessId(
+        1,
+        position: Duration.zero,
+        duration: Duration.zero,
+      );
+
+      expect(session.fraction, isNull);
+    });
+
+    test('keeps process state separate from danmaku state', () {
+      final session = _sessionFromProcessId(
+        1,
+        danmakuList: [
+          DanmakuItem(
+            danmakuId: 'later',
+            content: 'later',
+            time: const Duration(seconds: 3),
+            colorRgb: 0xFFFFFF,
+            mode: DanmakuMode.top,
+          ),
+          DanmakuItem(
+            danmakuId: 'first',
+            content: 'first',
+            time: const Duration(seconds: 1),
+            colorRgb: 0xFF0000,
+            mode: DanmakuMode.scroll,
+          ),
+        ],
+        danmakuAssSettings: const AssExportSettings(
+          fontSize: 30,
+          scrollDurationSeconds: 5,
+        ),
+      );
+
+      expect(session.fraction, isNull);
+    });
+  });
+
+  group(
+    'ExternalPlayerConsoleService on Linux',
+    () {
+      test('only keeps the latest external player session', () async {
+        final firstProcess = await _startPlayer();
+        final secondProcess = await _startPlayer();
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await _stopProcess(firstProcess);
+          await _stopProcess(secondProcess);
+        });
+
+        final initialTimestamp = ExternalPlayerConsoleService.stateTimestamp;
+        _showSession(_session(firstProcess));
+        final firstTimestamp = ExternalPlayerConsoleService.stateTimestamp;
+        _showSession(_session(secondProcess));
+
+        expect(firstTimestamp, greaterThan(initialTimestamp));
+        expect(
+          ExternalPlayerConsoleService.stateTimestamp,
+          greaterThan(firstTimestamp),
+        );
+        expect(service.session?.processId, secondProcess.pid);
+        expect(service.session?.duration, Duration.zero);
+        expect(await firstProcess.exitCode, isNotNull);
+      });
+
+      test('keeps playable metadata in the console service', () async {
+        final process = await _startPlayer();
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await _stopProcess(process);
+        });
+        final playableItem = PlayableItem(
+          videoPath: '/video/test.mkv',
+          title: '测试番剧',
+          subtitle: '第 1 话',
+          animeId: 100,
+          episodeId: 200,
+        );
+
+        _showSession(
+          _session(process),
+          playableItem: playableItem,
+        );
+
+        expect(service.mediaPath, '/video/test.mkv');
+        expect(service.animeTitle, '测试番剧');
+        expect(service.episodeTitle, '第 1 话');
+        expect(service.episodeId, 200);
+      });
+
+      test('calculates active danmaku in the console service', () async {
+        final process = await _startPlayer();
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await _stopProcess(process);
+        });
+        final session = _session(
+          process,
+          position: const Duration(seconds: 3),
+          danmakuList: [
+            DanmakuItem(
+              danmakuId: 'later',
+              content: 'later',
+              time: const Duration(seconds: 3),
+              mode: DanmakuMode.top,
+            ),
+            DanmakuItem(
+              danmakuId: 'first',
+              content: 'first',
+              time: const Duration(seconds: 1),
+              mode: DanmakuMode.scroll,
+            ),
+          ],
+          danmakuAssSettings: const AssExportSettings(
+            fontSize: 30,
+            scrollDurationSeconds: 5,
+          ),
+        );
+        _showSession(session);
+
+        expect(service.activeDanmakuIndices, [0, 1]);
+        session.position = const Duration(seconds: 6);
+        expect(service.activeDanmakuIndices, [1]);
+        session.position = const Duration(seconds: 8);
+        expect(service.activeDanmakuIndices, isEmpty);
+      });
+
+      test('blocks danmaku by keyword, regex, and sender ID', () async {
+        final process = await _startPlayer();
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await _stopProcess(process);
+        });
+        _showSession(_session(
+          process,
+          danmakuList: [
+            DanmakuItem(
+              content: 'Alpha comment',
+              time: const Duration(seconds: 1),
+              senderId: 'sender-one',
+            ),
+            DanmakuItem(
+              content: 'Episode 123',
+              time: const Duration(seconds: 2),
+              senderId: 'sender-two',
+            ),
+            DanmakuItem(
+              content: 'keep me',
+              time: const Duration(seconds: 3),
+              senderId: 'sender-three',
+            ),
+          ],
+        ));
+
+        expect(
+          ExternalPlayerConsoleService.addBlockedItem(
+            'alpha',
+            ItemType.keyword,
+          ),
+          isTrue,
+        );
+        expect(
+          ExternalPlayerConsoleService.addBlockedItem(
+            r'\d{3}$',
+            ItemType.regex,
+          ),
+          isTrue,
+        );
+        expect(
+          ExternalPlayerConsoleService.addBlockedItem(
+            'sender-three',
+            ItemType.userId,
+          ),
+          isTrue,
+        );
+        expect(
+          service.danmakuList.map((item) => item.visible),
+          [false, false, false],
+        );
+        expect(
+          service.blockedItems.map((item) => item.type),
+          [ItemType.keyword, ItemType.regex, ItemType.userId],
+        );
+        expect(
+          ExternalPlayerConsoleService.addBlockedItem(
+            '[invalid',
+            ItemType.regex,
+          ),
+          isFalse,
+        );
+
+        final regexItem = service.blockedItems[1];
+        ExternalPlayerConsoleService.removeBlockedItem(regexItem);
+        expect(
+          service.danmakuList.map((item) => item.visible),
+          [false, true, false],
+        );
+      });
+
+      test('close hides the session and terminates the player', () async {
+        final process = await _startPlayer();
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await _stopProcess(process);
+        });
+        _showSession(_session(process));
+
+        ExternalPlayerConsoleService.closePlayerAndConsole();
+        ExternalPlayerConsoleService.closePlayerAndConsole();
+
+        expect(service.session, isNull);
+        expect(await process.exitCode, isNotNull);
+      });
+
+      test('automatically clears the session after the player exits', () async {
+        final process = await _startPlayer(duration: '0.05');
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await _stopProcess(process);
+        });
+        _showSession(_session(process));
+
+        await _waitUntil(() => service.session == null);
+      });
+
+      testWidgets('toggles one danmaku visibility from the list', (tester) async {
+        final process = await tester.runAsync(_startPlayer);
+        if (process == null) fail('Failed to start the test player process');
+        try {
+          _showSession(_session(
+            process,
+            danmakuList: [
+              DanmakuItem.fromMap({
+                'time': 1.0,
+                'content': 'source test',
+                'type': 'scroll',
+                'color': 'rgb(255,255,255)',
+                'p': '1.0,1,16777215,sender-hash',
+                'cid': 'comment-id',
+                'source': 'dandanplay',
+              }),
+            ],
+          ));
+          final service = ExternalPlayerConsoleService.instance;
+          final item = service.danmakuList.single;
+          expect(
+            ExternalPlayerConsoleService.addBlockedItem(
+              'another-sender',
+              ItemType.userId,
+            ),
+            isTrue,
+          );
+
+          await tester.pumpWidget(const MaterialApp(
+            locale: Locale('zh'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: ExternalPlayerConsolePage(),
+          ));
+
+          final modeSelector = find.byKey(
+            const Key('external-player-danmaku-block-mode'),
+          );
+          expect(modeSelector, findsOneWidget);
+          expect(find.text('关键词'), findsOneWidget);
+          expect(find.text('正则表达式'), findsOneWidget);
+          expect(find.text('发送者 ID'), findsWidgets);
+          expect(service.blockedItems.single.type, ItemType.userId);
+          expect(service.blockedItems.single.value, 'another-sender');
+          expect(
+            find.byKey(const ValueKey(
+              'external-player-danmaku-block-item-userId-another-sender',
+            )),
+            findsOneWidget,
+          );
+
+          expect(find.textContaining('sender-hash'), findsOneWidget);
+          expect(find.textContaining('dandanplay'), findsNothing);
+          final visibilityButton = find.byKey(const ValueKey(
+            'external-player-danmaku-visibility-0-comment-id',
+          ));
+          expect(visibilityButton, findsOneWidget);
+          expect(
+            find.descendant(
+              of: visibilityButton,
+              matching: find.byIcon(Icons.visibility_rounded),
+            ),
+            findsOneWidget,
+          );
+
+          final initialTimestamp =
+              ExternalPlayerConsoleService.stateTimestamp;
+          await tester.ensureVisible(visibilityButton);
+          await tester.pump();
+          await tester.tap(visibilityButton);
+          await tester.pump();
+          expect(item.visible, isFalse);
+          expect(
+            ExternalPlayerConsoleService.stateTimestamp,
+            greaterThan(initialTimestamp),
+          );
+          expect(
+            find.descendant(
+              of: visibilityButton,
+              matching: find.byIcon(Icons.visibility_off_rounded),
+            ),
+            findsOneWidget,
+          );
+
+          await tester.ensureVisible(visibilityButton);
+          await tester.pump();
+          await tester.tap(visibilityButton);
+          await tester.pump();
+          expect(item.visible, isTrue);
+          expect(find.text('弹幕描边粗细'), findsOneWidget);
+          expect(find.text('启用弹幕描边'), findsNothing);
+          expect(
+            find.byKey(const Key('external-player-timestamp-input')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('external-player-timestamp-seek')),
+            findsOneWidget,
+          );
+        } finally {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          Process.killPid(process.pid, ProcessSignal.sigkill);
+        }
+      });
+
+      test('reads playback progress through mpv JSON IPC', () async {
+        final process = await _startPlayer();
+        final tempDir =
+            await Directory.systemTemp.createTemp('nipaplay_ipc_test_');
+        final socketPath = '${tempDir.path}/mpv.sock';
+        var positionSeconds = 0.0;
+        final server = await ServerSocket.bind(
+          InternetAddress(socketPath, type: InternetAddressType.unix),
+          0,
+        );
+        server.listen((client) {
+          client
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            final requestId = request['request_id'];
+            client.writeln(jsonEncode({
+              'data': requestId == 1
+                  ? positionSeconds
+                  : requestId == 2
+                      ? 1500.0
+                      : false,
+              'error': 'success',
+              'request_id': requestId,
+            }));
+          });
+        });
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await server.close();
+          await _stopProcess(process);
+          await tempDir.delete(recursive: true);
+        });
+        _showSession(_session(
+          process,
+          ipcPath: socketPath,
+        ));
+        expect(service.session?.duration, Duration.zero);
+
+        await _waitUntil(
+          () => service.session?.duration == const Duration(minutes: 25),
+        );
+        expect(service.session?.position, Duration.zero);
+
+        positionSeconds = 75.5;
+        await _waitUntil(
+          () => service.session?.position != Duration.zero,
+        );
+
+        expect(
+          service.session?.position,
+          const Duration(seconds: 75, milliseconds: 500),
+        );
+        expect(
+          service.session?.duration,
+          const Duration(minutes: 25),
+        );
+        expect(service.session?.fraction, closeTo(0.0503, 0.0001));
+        expect(service.session?.isPaused, isFalse);
+      });
+
+      test('toggles mpv pause state through JSON IPC', () async {
+        final process = await _startPlayer();
+        final tempDir =
+            await Directory.systemTemp.createTemp('nipaplay_ipc_test_');
+        final socketPath = '${tempDir.path}/mpv.sock';
+        final commands = <bool>[];
+        final server = await ServerSocket.bind(
+          InternetAddress(socketPath, type: InternetAddressType.unix),
+          0,
+        );
+        server.listen((client) {
+          client
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            final command = request['command'] as List<dynamic>;
+            if (command.first == 'set_property' && command[1] == 'pause') {
+              commands.add(command[2] as bool);
+            }
+            client.writeln(jsonEncode({
+              'data': null,
+              'error': 'success',
+              'request_id': request['request_id'],
+            }));
+          });
+        });
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await server.close();
+          await _stopProcess(process);
+          await tempDir.delete(recursive: true);
+        });
+        _showSession(
+          _session(process, ipcPath: socketPath),
+        );
+
+        ExternalPlayerConsoleService.togglePause();
+        await _waitUntil(
+          () => commands.length == 1 && service.session?.isPaused == true,
+        );
+        ExternalPlayerConsoleService.togglePause();
+        await _waitUntil(
+          () => commands.length == 2 && service.session?.isPaused == false,
+        );
+
+        expect(commands, <bool>[true, false]);
+        expect(service.session?.isPaused, isFalse);
+      });
+
+      test('seeks mpv through JSON IPC', () async {
+        final process = await _startPlayer();
+        final tempDir =
+            await Directory.systemTemp.createTemp('nipaplay_ipc_test_');
+        final socketPath = '${tempDir.path}/mpv.sock';
+        final commands = <List<dynamic>>[];
+        final server = await ServerSocket.bind(
+          InternetAddress(socketPath, type: InternetAddressType.unix),
+          0,
+        );
+        server.listen((client) {
+          client
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            final command = request['command'] as List<dynamic>;
+            if (command.first == 'seek') {
+              commands.add(command);
+            }
+            client.writeln(jsonEncode({
+              'data': null,
+              'error': 'success',
+              'request_id': request['request_id'],
+            }));
+          });
+        });
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await server.close();
+          await _stopProcess(process);
+          await tempDir.delete(recursive: true);
+        });
+        _showSession(_session(
+          process,
+          ipcPath: socketPath,
+          duration: const Duration(minutes: 20),
+          position: const Duration(minutes: 2),
+          danmakuList: [
+            DanmakuItem(
+              danmakuId: 'seek-target',
+              content: 'seek target',
+              time: const Duration(minutes: 12),
+              colorRgb: 0xFFFFFF,
+              mode: DanmakuMode.scroll,
+            ),
+          ],
+          danmakuAssSettings: const AssExportSettings(
+            fontSize: 30,
+            scrollDurationSeconds: 60,
+          ),
+        ));
+
+        ExternalPlayerConsoleService.seekToFraction(0.625);
+        await _waitUntil(() => commands.isNotEmpty);
+
+        expect(
+          service.session?.position,
+          const Duration(minutes: 12, seconds: 30),
+        );
+        expect(commands, <List<dynamic>>[
+          <dynamic>['seek', 750.0, 'absolute+exact'],
+        ]);
+        expect(service.activeDanmakuIndices, [0]);
+
+        expect(
+          ExternalPlayerConsoleService.seekToTimestamp('12:34.567'),
+          isTrue,
+        );
+        await _waitUntil(() => commands.length == 2);
+        expect(
+          service.session?.position,
+          const Duration(minutes: 12, seconds: 34, milliseconds: 567),
+        );
+        expect(
+          commands.last,
+          <dynamic>['seek', 754.567, 'absolute+exact'],
+        );
+
+        expect(
+          ExternalPlayerConsoleService.seekToTimestamp('invalid'),
+          isFalse,
+        );
+        expect(commands.length, 2);
+      });
+
+      test('coalesces rapid danmaku opacity updates without truncating ASS', () async {
+        final process = await _startPlayer();
+        final tempDir =
+            await Directory.systemTemp.createTemp('nipaplay_ipc_test_');
+        final socketPath = '${tempDir.path}/mpv.sock';
+        final assFile = File('${tempDir.path}/danmaku.ass');
+        await assFile.writeAsString('[Script Info]\nstale ASS\n');
+        final reloadCommands = <List<dynamic>>[];
+        final server = await ServerSocket.bind(
+          InternetAddress(socketPath, type: InternetAddressType.unix),
+          0,
+        );
+        server.listen((client) {
+          client
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            final command = request['command'] as List<dynamic>;
+            if (command.first == 'script-message-to') {
+              reloadCommands.add(command);
+            }
+            client.writeln(jsonEncode({
+              'data': null,
+              'error': 'success',
+              'request_id': request['request_id'],
+            }));
+          });
+        });
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await server.close();
+          await _stopProcess(process);
+          await tempDir.delete(recursive: true);
+        });
+        final session = _session(
+          process,
+          ipcPath: socketPath,
+          danmakuAssPath: assFile.path,
+          danmakuOpacity: 0.8,
+          danmakuList: [
+            DanmakuItem(
+              time: const Duration(seconds: 1),
+              content: 'first regenerated comment',
+            ),
+            DanmakuItem(
+              time: const Duration(seconds: 12),
+              content: 'second regenerated comment',
+            ),
+          ],
+          danmakuAssSettings: const AssExportSettings(
+            fontSize: 30,
+            opacity: 0.8,
+          ),
+        );
+        _showSession(session);
+
+        expect(service.danmakuOpacity, 0.8);
+        expect(service.supportsDanmakuOpacity, isTrue);
+
+        final initialTimestamp = ExternalPlayerConsoleService.stateTimestamp;
+        for (final opacity in <double>[0.1, 0.2, 0.3, 0.4, 0.5]) {
+          ExternalPlayerConsoleService.setDanmakuOpacity(opacity);
+        }
+        await _waitUntil(
+          () => reloadCommands.isNotEmpty,
+        );
+
+        expect(service.danmakuOpacity, 0.5);
+        expect(
+          ExternalPlayerConsoleService.stateTimestamp,
+          greaterThan(initialTimestamp),
+        );
+        final styleTimestamp = ExternalPlayerConsoleService.stateTimestamp;
+        ExternalPlayerConsoleService.setDanmakuOpacity(0.5);
+        expect(ExternalPlayerConsoleService.stateTimestamp, styleTimestamp);
+        final updatedAss = await assFile.readAsString();
+        final opacityTags = RegExp(r'\\1a&H[0-9A-Fa-f]{2}&')
+            .allMatches(updatedAss)
+            .map((match) => match.group(0))
+            .toList();
+        expect(updatedAss, isNotEmpty);
+        expect(updatedAss.startsWith('[Script Info]\n'), isTrue);
+        expect(updatedAss, contains('first regenerated comment'));
+        expect(updatedAss, contains('second regenerated comment'));
+        expect(opacityTags, isNotEmpty);
+        expect(opacityTags, everyElement(r'\1a&H80&'));
+        expect(File('${assFile.path}.nipaplay.tmp').existsSync(), isFalse);
+        expect(reloadCommands, <List<dynamic>>[
+          <dynamic>[
+            'script-message-to',
+            'danmaku.ass',
+            'nipaplay-danmaku-reload',
+            assFile.path,
+          ],
+        ]);
+
+        final secondItem = service.danmakuList[1];
+        final keywordTimestamp = ExternalPlayerConsoleService.stateTimestamp;
+        expect(
+          ExternalPlayerConsoleService.addBlockedItem(
+            'SECOND',
+            ItemType.keyword,
+          ),
+          isTrue,
+        );
+        final addedKeywordTimestamp =
+            ExternalPlayerConsoleService.stateTimestamp;
+        expect(addedKeywordTimestamp, greaterThan(keywordTimestamp));
+        expect(
+          ExternalPlayerConsoleService.addBlockedItem(
+            'second',
+            ItemType.keyword,
+          ),
+          isFalse,
+        );
+        expect(
+          ExternalPlayerConsoleService.stateTimestamp,
+          addedKeywordTimestamp,
+        );
+        await _waitUntil(() => reloadCommands.length == 2);
+
+        final filteredAss = await assFile.readAsString();
+        expect(service.blockedItems, hasLength(1));
+        expect(service.blockedItems.single.value, 'SECOND');
+        expect(service.blockedItems.single.type, ItemType.keyword);
+        expect(
+          service.danmakuList.map((item) => item.content),
+          ['first regenerated comment', 'second regenerated comment'],
+        );
+        expect(
+          service.danmakuList.map((item) => item.visible),
+          [true, false],
+        );
+        expect(identical(service.danmakuList[1], secondItem), isTrue);
+        expect(filteredAss, contains('first regenerated comment'));
+        expect(filteredAss, isNot(contains('second regenerated comment')));
+
+        ExternalPlayerConsoleService.removeBlockedItem(
+          service.blockedItems.single,
+        );
+        expect(
+          ExternalPlayerConsoleService.stateTimestamp,
+          greaterThan(addedKeywordTimestamp),
+        );
+        await _waitUntil(() => reloadCommands.length == 3);
+        expect(service.blockedItems, isEmpty);
+        expect(
+          service.danmakuList.map((item) => item.visible),
+          [true, true],
+        );
+        expect(identical(service.danmakuList[1], secondItem), isTrue);
+        expect(
+          await assFile.readAsString(),
+          contains('second regenerated comment'),
+        );
+      });
+
+      test('adjusts danmaku outline width and disables it at zero', () async {
+        final process = await _startPlayer();
+        final tempDir =
+            await Directory.systemTemp.createTemp('nipaplay_ipc_test_');
+        final socketPath = '${tempDir.path}/mpv.sock';
+        final assFile = File('${tempDir.path}/danmaku.ass');
+        const stylePrefix =
+            'Style: Danmaku,Arial,48.0,&H00FFFFFF,&H00FFFFFF,'
+            '&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,';
+        await assFile.writeAsString(
+          '[V4+ Styles]\n$stylePrefix' '2.5,0.0,2,0,0,0,1\n',
+        );
+        final reloadCommands = <List<dynamic>>[];
+        final server = await ServerSocket.bind(
+          InternetAddress(socketPath, type: InternetAddressType.unix),
+          0,
+        );
+        server.listen((client) {
+          client
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            reloadCommands.add(request['command'] as List<dynamic>);
+            client.writeln(jsonEncode({
+              'data': null,
+              'error': 'success',
+              'request_id': request['request_id'],
+            }));
+          });
+        });
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await server.close();
+          await _stopProcess(process);
+          await tempDir.delete(recursive: true);
+        });
+        final session = _session(
+          process,
+          ipcPath: socketPath,
+          danmakuAssPath: assFile.path,
+          danmakuOutlineWidth: 2.5,
+          danmakuList: [
+            DanmakuItem(
+              time: const Duration(seconds: 1),
+              content: 'outline regenerated comment',
+            ),
+          ],
+          danmakuAssSettings: const AssExportSettings(
+            fontSize: 30,
+            fontFamily: 'Arial',
+            outlineStyle: AssOutlineStyle.stroke,
+            outlineWidth: 2.5,
+          ),
+        );
+        _showSession(session);
+
+        expect(service.supportsDanmakuOutline, isTrue);
+        expect(service.danmakuOutlineWidth, 2.5);
+
+        ExternalPlayerConsoleService.setDanmakuOutlineWidth(4.0);
+        await _waitUntil(() => reloadCommands.length == 1);
+        expect(service.danmakuOutlineWidth, 4.0);
+        expect(await assFile.readAsString(), contains('$stylePrefix' '4.0,0.0'));
+
+        ExternalPlayerConsoleService.setDanmakuOutlineWidth(0.0);
+        await _waitUntil(() => reloadCommands.length == 2);
+        expect(service.danmakuOutlineWidth, 0.0);
+        expect(await assFile.readAsString(), contains('$stylePrefix' '0.0,0.0'));
+        expect(File('${assFile.path}.nipaplay.tmp').existsSync(), isFalse);
+      });
+
+      test('replacing a session clears the previous progress', () async {
+        final firstProcess = await _startPlayer();
+        final secondProcess = await _startPlayer();
+        final tempDir =
+            await Directory.systemTemp.createTemp('nipaplay_ipc_test_');
+        final socketPath = '${tempDir.path}/mpv.sock';
+        final server = await ServerSocket.bind(
+          InternetAddress(socketPath, type: InternetAddressType.unix),
+          0,
+        );
+        server.listen((client) {
+          client
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            final requestId = request['request_id'];
+            client.writeln(jsonEncode({
+              'data': requestId == 1
+                  ? 60.0
+                  : requestId == 2
+                      ? 1200.0
+                      : false,
+              'error': 'success',
+              'request_id': requestId,
+            }));
+          });
+        });
+        final service = ExternalPlayerConsoleService.instance;
+        addTearDown(() async {
+          ExternalPlayerConsoleService.closePlayerAndConsole();
+          await server.close();
+          await _stopProcess(firstProcess);
+          await _stopProcess(secondProcess);
+          await tempDir.delete(recursive: true);
+        });
+        _showSession(_session(
+          firstProcess,
+          ipcPath: socketPath,
+          duration: const Duration(minutes: 20),
+        ));
+        await _waitUntil(
+          () => service.session?.position != Duration.zero,
+        );
+
+        _showSession(_session(secondProcess));
+
+        expect(service.session?.processId, secondProcess.pid);
+        expect(service.session?.position, Duration.zero);
+        expect(service.session?.duration, Duration.zero);
+      });
+    },
+    skip: !Platform.isLinux,
+  );
+}

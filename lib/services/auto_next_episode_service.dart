@@ -225,16 +225,14 @@ class AutoNextEpisodeService {
         _nextEpisodePath = null;
         return;
       }
-      ExternalPlayerService.launch(
-        playerPath: playerPath,
-        mediaPath: nextEpisodePath,
-      ).then((launched) {
+      ExternalPlayerService.launch(playerPath: playerPath, mediaPath: nextEpisodePath)
+      .then((session) {
         if (context is Element && !context.mounted) {
           return;
         }
         BlurSnackBar.show(
           context,
-          launched ? '已通过外部播放器打开下一话' : '外部播放器启动失败',
+          session != null ? '已通过外部播放器打开下一话' : '外部播放器启动失败',
         );
       });
       _nextEpisodePath = null;

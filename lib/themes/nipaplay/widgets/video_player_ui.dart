@@ -13,6 +13,7 @@ import 'package:nipaplay/widgets/context_menu/context_menu.dart';
 import 'package:nipaplay/widgets/danmaku_overlay.dart';
 import 'package:nipaplay/widgets/external_subtitle_overlay.dart';
 import 'package:nipaplay/widgets/macos_native_video_view.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/themed_anime_detail.dart';
 import 'package:provider/provider.dart';
 import 'brightness_gesture_area.dart';
 import 'volume_gesture_area.dart';
@@ -33,8 +34,13 @@ import 'package:video_player/video_player.dart';
 
 class VideoPlayerUI extends StatefulWidget {
   final Widget? emptyPlaceholder;
+  final double danmakuScale;
 
-  const VideoPlayerUI({super.key, this.emptyPlaceholder});
+  const VideoPlayerUI({
+    super.key,
+    this.emptyPlaceholder,
+    this.danmakuScale = 1.0,
+  });
 
   @override
   State<VideoPlayerUI> createState() => _VideoPlayerUIState();
@@ -105,7 +111,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
         currentPosition: videoState.playbackTimeMs.value,
         videoDuration: videoState.videoDuration.inMilliseconds.toDouble(),
         isPlaying: videoState.status == PlayerStatus.playing,
-        fontSize: getFontSize(videoState),
+        fontSize: getFontSize(videoState) * widget.danmakuScale,
         isVisible: videoState.danmakuVisible,
         opacity: videoState.mappedDanmakuOpacity,
       ),
@@ -120,7 +126,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
           currentPosition: posMs,
           videoDuration: videoState.videoDuration.inMilliseconds.toDouble(),
           isPlaying: videoState.status == PlayerStatus.playing,
-          fontSize: getFontSize(videoState),
+          fontSize: getFontSize(videoState) * widget.danmakuScale,
           isVisible: videoState.danmakuVisible,
           opacity: videoState.mappedDanmakuOpacity,
         );
@@ -307,16 +313,18 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
 
   Widget _buildVideoSurfaceStage(VideoPlayerState videoState, int? textureId) {
     if (_shouldUseWindowHostedVideoOverlay(videoState)) {
-      // iOS only: the native plane must not extend under the notch, so we
-      // letterbox the video into a centered safe-area sub-rect here and keep
-      // the surroundings transparent; Erika owns the black window background,
-      // which shows through as the bars.
+      // iOS only: the window-overlay plane mirrors this Flutter rect, so keep
+      // it sized to the video aspect ratio and centered. This preserves the
+      // iPhone notch-safe path and keeps iPad video from anchoring at the
+      // top-left of a full-bleed native plane.
       //
-      // macOS keeps the full-bleed surface: there is no notch and Erika
-      // letterboxes natively into a full-screen plane. Flutter must NOT shrink
-      // the plane or paint around it, or the app UI behind shows through the
-      // (now transparent) bars.
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      // macOS keeps the full-bleed surface: Erika letterboxes natively into
+      // the reserved plane. Flutter must NOT shrink the plane or paint around
+      // it, or the app UI behind shows through the transparent bars.
+      final useLegacyIosAspectSurface = !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.iOS &&
+          Platform.environment['NIPAPLAY_IOS_ERIKA_ASPECT_SURFACE'] == '1';
+      if (useLegacyIosAspectSurface) {
         return Center(
           child: AspectRatio(
             aspectRatio: videoState.aspectRatio,
@@ -827,6 +835,22 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
     }
   }
 
+  Future<void> _showAnimeDetail(VideoPlayerState videoState) async {
+    final detailContext = videoState.animeDetailContext;
+    if (detailContext == null) return;
+
+    try {
+      await ThemedAnimeDetail.show(
+        context,
+        detailContext.animeId ?? 0,
+        playbackDetailContext: detailContext,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      BlurSnackBar.show(context, '打开番剧详情失败: $e');
+    }
+  }
+
   List<ContextMenuAction> _buildContextMenuActions(
     VideoPlayerState videoState,
   ) {
@@ -843,6 +867,12 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
         enabled: videoState.canPlayNextEpisode,
         onPressed: () => unawaited(videoState.playNextEpisode()),
       ),
+      if (videoState.animeDetailContext != null)
+        ContextMenuAction(
+          icon: Icons.movie_outlined,
+          label: '番剧详情',
+          onPressed: () => unawaited(_showAnimeDetail(videoState)),
+        ),
       ContextMenuAction(
         icon: Icons.fast_forward_rounded,
         label: '快进 ${videoState.seekStepDisplayLabel}',
@@ -940,6 +970,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                       episodeTitle: videoState.episodeTitle,
                       fileName: videoState.currentVideoPath?.split('/').last,
                       animeId: videoState.animeId,
+                      coverImageUrl: videoState.loadingCoverImageUrl,
                     ),
                 ],
               );
@@ -1061,6 +1092,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                               ?.split('/')
                                               .last,
                                           animeId: videoState.animeId,
+                                          coverImageUrl:
+                                              videoState.loadingCoverImageUrl,
                                         ),
                                       ),
                                     if (videoState.hasVideo)
@@ -1146,6 +1179,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                                 ?.split('/')
                                                 .last,
                                             animeId: videoState.animeId,
+                                            coverImageUrl:
+                                                videoState.loadingCoverImageUrl,
                                           ),
                                         ),
                                       if (videoState.hasVideo)
