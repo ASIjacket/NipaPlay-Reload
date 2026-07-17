@@ -664,42 +664,17 @@ abstract class MediaServerServiceBase {
     }
   }
 
-  // 全局 Emby/Jellyfin 连接 User-Agent（所有服务器共用；与 DeviceId 同属媒体服务器
-  // 身份设置）。空字符串表示使用默认值 NipaPlay/1.0。
-  static const String defaultConnectionUserAgent = 'NipaPlay/1.0';
-  static const String _kConnectionUserAgentPref =
-      'media_server_connection_user_agent_v1';
-  static String? _connectionUaCache; // null = 尚未从持久化读取
-
-  static String _sanitizeUserAgent(String ua) =>
-      // 去掉 HTTP 头值非法的控制字符（保留 0x09 HTAB 与 0x20+），防止头注入。
-      ua.replaceAll(RegExp(r'[\x00-\x08\x0A-\x1F\x7F]'), '').trim();
+  static const String defaultConnectionUserAgent =
+      MediaServerTransport.defaultConnectionUserAgent;
 
   /// 持久化全局连接 UA（留空表示使用默认 NipaPlay/1.0），立即刷新缓存，返回清洗后的值。
   static Future<String> saveConnectionUserAgent(String userAgent) async {
-    final sanitized = _sanitizeUserAgent(userAgent);
-    _connectionUaCache = sanitized;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kConnectionUserAgentPref, sanitized);
-    } catch (_) {}
-    return sanitized;
+    return MediaServerTransport.saveConnectionUserAgent(userAgent);
   }
 
   /// 读取已保存的全局连接 UA 原始值（空字符串=用默认值，供设置页回显）。
   static Future<String> getStoredConnectionUserAgent() async {
-    final cached = _connectionUaCache;
-    if (cached != null) return cached;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final v =
-          _sanitizeUserAgent(prefs.getString(_kConnectionUserAgentPref) ?? '');
-      _connectionUaCache = v;
-      return v;
-    } catch (_) {
-      _connectionUaCache = '';
-      return '';
-    }
+    return MediaServerTransport.getStoredConnectionUserAgent();
   }
 
   Future<http.Response> _sendSingleRequest(
@@ -712,18 +687,6 @@ abstract class MediaServerServiceBase {
     final request = http.Request(method, uri)
       ..followRedirects = false
       ..headers.addAll(headers);
-
-    // Emby/Jellyfin 服务器可能位于按 User-Agent 过滤的 WAF/CDN 之后，dart:io 的
-    // 默认 UA（`Dart/x (dart:io)`）会被拦截（典型表现 403/404）。若调用方未显式
-    // 指定 UA，则补全局「连接 User-Agent」（设置 → 远程媒体库，所有服务器共用），
-    // 未配置时回退默认 `NipaPlay/1.0`。
-    final hasUserAgent =
-        request.headers.keys.any((k) => k.toLowerCase() == 'user-agent');
-    if (!hasUserAgent) {
-      final stored = await getStoredConnectionUserAgent();
-      request.headers['User-Agent'] =
-          stored.isEmpty ? defaultConnectionUserAgent : stored;
-    }
 
     switch (method) {
       case 'GET':

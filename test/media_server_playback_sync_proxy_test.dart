@@ -8,13 +8,19 @@ import 'package:nipaplay/services/emby_playback_sync_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/jellyfin_playback_sync_service.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
+import 'package:nipaplay/services/media_server_service_base.dart';
 import 'package:nipaplay/services/media_server_transport.dart';
 
 void main() {
   test('routes Emby and Jellyfin playback sync through the configured proxy',
       () async {
-    final receivedRequests =
-        <({String method, Uri uri, String body, String? token})>[];
+    final receivedRequests = <({
+      String method,
+      Uri uri,
+      String body,
+      String? token,
+      String? userAgent,
+    })>[];
     final proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => proxy.close(force: true));
     proxy.listen((request) async {
@@ -24,6 +30,7 @@ void main() {
         uri: request.uri,
         body: body,
         token: request.headers.value('x-emby-token'),
+        userAgent: request.headers.value('user-agent'),
       ));
       final isEmby = request.uri.path.startsWith('/emby/');
       request.response
@@ -56,6 +63,8 @@ void main() {
       'http://${proxy.address.address}:${proxy.port}',
     );
     addTearDown(MediaServerTransport.clearHttpProxyOverride);
+    await MediaServerServiceBase.saveConnectionUserAgent('SyncClient/4.0');
+    addTearDown(() => MediaServerServiceBase.saveConnectionUserAgent(''));
     final emby = EmbyService.instance
       ..serverUrl = 'http://${embyTarget.address.address}:${embyTarget.port}'
       ..accessToken = 'emby-token'
@@ -162,6 +171,10 @@ void main() {
           'PlaySessionId',
           'jellyfin-session',
         ));
+    expect(
+      receivedRequests.map((request) => request.userAgent),
+      everyElement('SyncClient/4.0'),
+    );
     expect(embyDirectRequests, isEmpty);
     expect(jellyfinDirectRequests, isEmpty);
   });

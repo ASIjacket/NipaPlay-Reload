@@ -2,8 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nipaplay/services/media_server_transport.dart';
 import 'package:nipaplay/services/media_server_image_loader.dart';
+import 'package:nipaplay/services/media_server_service_base.dart';
+import 'package:nipaplay/services/media_server_transport.dart';
 
 void main() {
   test('media-server image detection stays inside the registered base path',
@@ -31,12 +32,15 @@ void main() {
 
   test('the default media-server image loader uses the configured transport',
       () async {
-    final receivedRequests = <Uri>[];
+    final receivedRequests = <({Uri uri, String? userAgent})>[];
     final expectedBytes = Uint8List.fromList([1, 2, 3, 4]);
     final proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => proxy.close(force: true));
     proxy.listen((request) async {
-      receivedRequests.add(request.uri);
+      receivedRequests.add((
+        uri: request.uri,
+        userAgent: request.headers.value('user-agent'),
+      ));
       request.response
         ..statusCode = HttpStatus.ok
         ..add(expectedBytes);
@@ -46,6 +50,10 @@ void main() {
       'http://${proxy.address.address}:${proxy.port}',
     );
     addTearDown(MediaServerTransport.clearHttpProxyOverride);
+    final savedUserAgent = await MediaServerServiceBase.saveConnectionUserAgent(
+      '  EmbyClient/2.0\r\nInjected  ',
+    );
+    addTearDown(() => MediaServerServiceBase.saveConnectionUserAgent(''));
     final target = Uri.parse(
       'http://media.invalid/emby/Items/library-id/Images/Primary',
     );
@@ -54,7 +62,10 @@ void main() {
 
     final bytes = await loadNetworkImageBytes(target);
 
-    expect(receivedRequests, [target]);
+    expect(savedUserAgent, 'EmbyClient/2.0Injected');
+    expect(receivedRequests, [
+      (uri: target, userAgent: 'EmbyClient/2.0Injected'),
+    ]);
     expect(bytes, expectedBytes);
   });
 }

@@ -67,6 +67,10 @@ class SettingsKeys {
   /// MDK 内核映射到 avformat.user_agent，media_kit/libmpv 映射到 user-agent。
   static const String playerCustomUserAgent = 'player_custom_user_agent';
 
+  /// Emby/Jellyfin API、图片和播放同步请求共用的 User-Agent。
+  static const String mediaServerConnectionUserAgent =
+      'media_server_connection_user_agent_v1';
+
   /// HTTP forward proxy endpoint（可承载 HTTP/HTTPS 目标流量；留空禁用）。
   /// MDK 内核映射到 avformat.http_proxy，media_kit/libmpv 映射到 http-proxy。
   static const String playerHttpProxy = 'player_http_proxy';

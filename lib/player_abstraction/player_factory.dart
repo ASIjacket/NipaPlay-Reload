@@ -6,6 +6,7 @@ import './erika_player_adapter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart'; // 用于 debugPrint
 import 'package:nipaplay/constants/settings_keys.dart'; // 自定义 UA / 代理 设置键
+import 'package:nipaplay/utils/http_user_agent.dart';
 import 'package:nipaplay/utils/system_resource_monitor.dart'; // 导入系统资源监控器
 import 'dart:async'; // 导入dart:async库
 
@@ -87,7 +88,7 @@ class PlayerFactory {
         _cachedMacOSNativeVideoEnabled,
       );
       _cachedAndroidAudioOutput = androidAudioOutput;
-      _cachedCustomUserAgent = customUserAgent.trim();
+      _cachedCustomUserAgent = sanitizeHttpUserAgent(customUserAgent);
       _cachedHttpProxy = httpProxy.trim();
 
       _hasLoadedSettings = true;
@@ -140,8 +141,9 @@ class PlayerFactory {
           _cachedMacOSNativeVideoEnabled,
         );
         _cachedAndroidAudioOutput = androidAudioOutput;
-        _cachedCustomUserAgent =
-            (prefs.getString(SettingsKeys.playerCustomUserAgent) ?? '').trim();
+        _cachedCustomUserAgent = sanitizeHttpUserAgent(
+          prefs.getString(SettingsKeys.playerCustomUserAgent) ?? '',
+        );
         _cachedHttpProxy =
             (prefs.getString(SettingsKeys.playerHttpProxy) ?? '').trim();
       }).catchError((e) {
@@ -245,7 +247,7 @@ class PlayerFactory {
   }
 
   static Future<void> saveCustomUserAgent(String userAgent) async {
-    final resolved = userAgent.trim();
+    final resolved = sanitizeHttpUserAgent(userAgent);
     final changed = resolved != _cachedCustomUserAgent;
     try {
       final prefs = await SharedPreferences.getInstance();

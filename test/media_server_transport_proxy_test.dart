@@ -9,6 +9,25 @@ import 'package:nipaplay/services/media_server_transport.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('adds the app User-Agent unless the caller already supplied one',
+      () async {
+    final client = _RecordingClient();
+    final transport = MediaServerTransport.fromClient(client);
+    addTearDown(transport.close);
+
+    await transport.send(
+      http.Request('GET', Uri.parse('http://media.invalid/default')),
+      timeout: const Duration(seconds: 1),
+    );
+    await transport.send(
+      http.Request('GET', Uri.parse('http://media.invalid/explicit'))
+        ..headers['user-agent'] = 'ExplicitClient/3.0',
+      timeout: const Duration(seconds: 1),
+    );
+
+    expect(client.userAgents, ['NipaPlay/1.0', 'ExplicitClient/3.0']);
+  });
+
   test('routes media-server requests through the configured HTTP proxy',
       () async {
     final proxyReceivedRequest = Completer<({String method, Uri uri})>();
@@ -263,5 +282,15 @@ class _StallingClient extends http.BaseClient {
   @override
   void close() {
     isClosed = true;
+  }
+}
+
+class _RecordingClient extends http.BaseClient {
+  final List<String?> userAgents = [];
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    userAgents.add(request.headers['User-Agent']);
+    return http.StreamedResponse(const Stream<List<int>>.empty(), 200);
   }
 }

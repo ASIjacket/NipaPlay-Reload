@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
 const bool supportsHttpForwardProxy = true;
+const bool supportsCustomUserAgentHeader = true;
 
 /// Creates a native client configured for an HTTP forward proxy.
 http.Client createMediaServerClient(Uri? proxyUri) {
