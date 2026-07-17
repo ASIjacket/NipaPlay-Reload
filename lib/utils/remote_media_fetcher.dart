@@ -12,6 +12,16 @@ import 'package:xml/xml.dart';
 import 'package:nipaplay/src/rust/api/media_probe.dart' as rust_media;
 import 'package:nipaplay/src/rust/rust_init.dart';
 
+int rustPlatformInt64ToDartInt(Object value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is BigInt) {
+    return value.toInt();
+  }
+  throw ArgumentError.value(value, 'value', 'Expected int or BigInt');
+}
+
 /// 获取远程媒体文件的基础信息，并计算前16MB内容的 MD5。
 ///
 /// 弹弹play的识别接口要求提供精确的文件大小和前16MB数据的MD5值。
@@ -39,7 +49,7 @@ class RemoteMediaFetcher {
         );
         return RemoteMediaHead(
           fileName: result.fileName,
-          fileSize: result.fileSize,
+          fileSize: rustPlatformInt64ToDartInt(result.fileSize),
           headBytes: Uint8List(0),
           bytesHashed: result.bytesHashed,
           hash: result.hash,
