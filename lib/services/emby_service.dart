@@ -13,6 +13,7 @@ import 'debug_log_service.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
 import 'package:nipaplay/services/emby_transcode_manager.dart';
 import 'package:nipaplay/services/media_server_playback_client.dart';
+import 'package:nipaplay/services/media_server_image_loader.dart';
 import 'media_server_service_base.dart';
 
 class EmbyService extends MediaServerServiceBase
@@ -202,7 +203,11 @@ class EmbyService extends MediaServerServiceBase
   @override
   String? get serverUrl => _serverUrl;
   @override
-  set serverUrl(String? value) => _serverUrl = value;
+  set serverUrl(String? value) {
+    _serverUrl = value;
+    setMediaServerBaseUrl('emby', value);
+  }
+
   @override
   String? get username => _username;
   @override

@@ -13,6 +13,7 @@ import 'package:nipaplay/widgets/user_activity/material_user_activity.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/utils/app_theme.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 enum _BangumiSyncHelpService { dandanplay, nipaplay }
 
@@ -491,7 +492,7 @@ class _MaterialAccountPageState extends State<MaterialAccountPage>
           children: [
             avatarUrl != null
                 ? ClipOval(
-                    child: Image.network(
+                    child: MediaServerAwareNetworkImage(
                       avatarUrl!,
                       width: 64,
                       height: 64,
@@ -895,7 +896,7 @@ class _MaterialAccountPageState extends State<MaterialAccountPage>
           // 头像
           avatarUrl != null
               ? ClipOval(
-                  child: Image.network(
+                  child: MediaServerAwareNetworkImage(
                     avatarUrl!,
                     width: 48,
                     height: 48,

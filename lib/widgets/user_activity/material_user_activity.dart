@@ -9,6 +9,7 @@ import 'package:nipaplay/pages/tab_labels.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/switchable_view.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 /// Fluent UI版本的用户活动记录组件
 class MaterialUserActivity extends StatefulWidget {
@@ -422,7 +423,7 @@ class _ActivityListItemState extends State<_ActivityListItem> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(coverRadius),
                       child: imageUrl != null
-                          ? Image.network(
+                          ? MediaServerAwareNetworkImage(
                               imageUrl,
                               width: coverWidth,
                               height: coverHeight,

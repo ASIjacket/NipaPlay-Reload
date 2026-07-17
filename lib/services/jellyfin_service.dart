@@ -6,6 +6,7 @@ import 'package:nipaplay/models/jellyfin_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/server_profile_model.dart';
 import 'package:nipaplay/services/media_server_playback_client.dart';
+import 'package:nipaplay/services/media_server_image_loader.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
 import 'package:path_provider/path_provider.dart'
     if (dart.library.html) 'package:nipaplay/utils/mock_path_provider.dart';
@@ -221,7 +222,11 @@ class JellyfinService extends MediaServerServiceBase
   @override
   String? get serverUrl => _serverUrl;
   @override
-  set serverUrl(String? value) => _serverUrl = value;
+  set serverUrl(String? value) {
+    _serverUrl = value;
+    setMediaServerBaseUrl('jellyfin', value);
+  }
+
   @override
   String? get username => _username;
   @override

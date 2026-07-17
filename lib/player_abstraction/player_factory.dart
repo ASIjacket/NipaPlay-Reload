@@ -266,7 +266,7 @@ class PlayerFactory {
     _kernelChangeController.add(_cachedKernelType ?? PlayerKernelType.mdk);
   }
 
-  /// 播放器网络流 HTTP/HTTPS 代理（留空表示不使用代理）。
+  /// HTTP forward proxy endpoint（可承载 HTTP/HTTPS 目标流量；留空禁用）。
   static String getHttpProxy() {
     if (!_hasLoadedSettings) {
       _loadSettingsSync();

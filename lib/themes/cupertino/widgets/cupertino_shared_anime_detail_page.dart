@@ -16,6 +16,7 @@ import 'package:nipaplay/services/bangumi_service.dart';
 import 'package:nipaplay/utils/network_settings.dart';
 import 'package:nipaplay/services/bangumi_api_service.dart';
 import 'package:nipaplay/services/dandanplay_service.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/models/anime_detail_display_mode.dart';
 import 'package:nipaplay/utils/theme_notifier.dart';
@@ -3138,7 +3139,7 @@ class _CupertinoSharedAnimeDetailPageState
           ),
         ],
       ),
-      child: Image.network(
+      child: MediaServerAwareNetworkImage(
         imageUrl,
         fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => DecoratedBox(

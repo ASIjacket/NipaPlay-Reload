@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:kmbal_ionicons/kmbal_ionicons.dart';
 import 'package:nipaplay/l10n/l10n.dart';
 import 'package:nipaplay/utils/network_settings.dart';
@@ -10,6 +11,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/player_abstraction/player_factory.dart';
 import 'package:nipaplay/services/media_server_service_base.dart';
+import 'package:nipaplay/services/media_server_transport.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 
 class NetworkSettingsPage extends StatefulWidget {
@@ -29,7 +31,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
       TextEditingController();
   bool _isSavingCustom = false;
   bool _isSavingBangumiCustom = false;
-  // 播放器网络流 HTTP/HTTPS 代理
+  // 播放器网络流 HTTP 代理
   final TextEditingController _proxyController = TextEditingController();
   bool _isSavingProxy = false;
 
@@ -59,12 +61,17 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
   Future<void> _saveProxy() async {
     if (_isSavingProxy) return;
     final value = _proxyController.text.trim();
-    // mpv 的 http-proxy 与 FFmpeg 的 http_proxy 均只支持 HTTP/HTTPS 代理。
-    if (value.isNotEmpty &&
-        !value.startsWith('http://') &&
-        !value.startsWith('https://')) {
+    if (kIsWeb && value.isNotEmpty) {
+      BlurSnackBar.show(context, '浏览器不支持为单个媒体服务器配置 HTTP 代理');
+      return;
+    }
+    try {
+      MediaServerTransport.validateHttpProxy(value);
+    } on FormatException {
       BlurSnackBar.show(
-          context, '仅支持 HTTP/HTTPS 代理，需带协议头，例如 http://127.0.0.1:8000');
+        context,
+        '代理地址无效，请使用 http://主机[:端口]，例如 http://127.0.0.1:8000',
+      );
       return;
     }
     setState(() {
@@ -97,7 +104,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
                   color: colorScheme.onSurface, size: 18),
               const SizedBox(width: 8),
               Text(
-                '播放器网络代理',
+                '媒体服务器与播放器代理',
                 style: TextStyle(
                   color: colorScheme.onSurface,
                   fontSize: 14,
@@ -110,7 +117,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
           Text(
             '为 Emby / Jellyfin 媒体服务器设置代理：同时作用于服务器连接（API 请求）与'
             '视频流（MDK / Libmpv 内核），不影响弹弹play / Bangumi 等其它请求。'
-            '仅支持 HTTP / HTTPS 代理（不支持 SOCKS），格式如 http://127.0.0.1:8000，'
+            '代理服务器地址仅支持 http://，仍可代理 HTTP / HTTPS 媒体服务器请求与视频流；'
+            '不支持 https:// 代理端点或 SOCKS。格式如 http://127.0.0.1:8000，'
             '留空表示不使用代理。保存后立即生效。',
             style: TextStyle(
                 color: colorScheme.onSurface.withOpacity(0.7), fontSize: 12),
@@ -144,8 +152,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
               icon: _isSavingProxy ? null : Ionicons.checkmark_outline,
               text: _isSavingProxy ? context.l10n.saving : '保存',
               onTap: _isSavingProxy ? () {} : _saveProxy,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               fontSize: 13,
               iconSize: 16,
               foregroundColor: colorScheme.onSurface,
@@ -289,7 +296,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     }
   }
 
-  Widget _buildStatusRow(String label, bool? available, ColorScheme colorScheme) {
+  Widget _buildStatusRow(
+      String label, bool? available, ColorScheme colorScheme) {
     String statusText;
     Color statusColor;
     IconData statusIcon;
@@ -395,8 +403,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
               icon: isSaving ? null : Ionicons.checkmark_outline,
               text: isSaving ? context.l10n.saving : context.l10n.useThisServer,
               onTap: isSaving ? () {} : onSave,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               fontSize: 13,
               iconSize: 16,
               foregroundColor: colorScheme.onSurface,
@@ -483,7 +490,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
                       width: 32,
                       height: 32,
                       child: IconButton(
-                        onPressed: isChecking ? null : _connectivity.checkConnectivity,
+                        onPressed:
+                            isChecking ? null : _connectivity.checkConnectivity,
                         icon: isChecking
                             ? SizedBox(
                                 width: 16,
@@ -522,7 +530,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
           Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
 
           // 播放器网络代理（仅桌面平台；手机端走系统级代理，不在此暴露）
-          if (globals.isDesktop) ...[
+          if (globals.isDesktop && !kIsWeb) ...[
             _buildProxySection(colorScheme),
             Divider(color: colorScheme.onSurface.withOpacity(0.12), height: 1),
           ],
@@ -551,7 +559,8 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
           ),
           _buildCustomServerSection(
             title: '自定义 Bangumi API 服务器',
-            hint: '输入自定义 Bangumi API 服务器地址，留空使用默认服务器 (${NetworkSettings.bangumiDefaultServer})',
+            hint:
+                '输入自定义 Bangumi API 服务器地址，留空使用默认服务器 (${NetworkSettings.bangumiDefaultServer})',
             controller: _customBangumiServerController,
             isSaving: _isSavingBangumiCustom,
             onSave: _saveCustomBangumiServer,

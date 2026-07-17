@@ -67,7 +67,7 @@ class SettingsKeys {
   /// MDK 内核映射到 avformat.user_agent，media_kit/libmpv 映射到 user-agent。
   static const String playerCustomUserAgent = 'player_custom_user_agent';
 
-  /// 播放器网络流 HTTP/HTTPS 代理（如 http://127.0.0.1:7890，留空表示不使用代理）。
+  /// HTTP forward proxy endpoint（可承载 HTTP/HTTPS 目标流量；留空禁用）。
   /// MDK 内核映射到 avformat.http_proxy，media_kit/libmpv 映射到 http-proxy。
   static const String playerHttpProxy = 'player_http_proxy';
 }

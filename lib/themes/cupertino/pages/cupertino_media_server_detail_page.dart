@@ -23,6 +23,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/services/playback_service.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_shared_anime_detail_page.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 class CupertinoMediaServerDetailPage extends StatefulWidget {
   const CupertinoMediaServerDetailPage({
@@ -1260,17 +1261,14 @@ class _CupertinoMediaServerDetailPageState
                   padding: const EdgeInsets.only(right: 16),
                   child: Column(
                     children: [
-                      CircleAvatar(
-                        radius: 32,
+                      MediaServerActorAvatar(
+                        imageUrl: imageUrl,
+                        size: 64,
                         backgroundColor: actorPlaceholderColor,
-                        backgroundImage:
-                            imageUrl != null ? NetworkImage(imageUrl) : null,
-                        child: imageUrl == null
-                            ? Icon(
-                                CupertinoIcons.person_fill,
-                                color: actorIconColor,
-                              )
-                            : null,
+                        placeholder: Icon(
+                          CupertinoIcons.person_fill,
+                          color: actorIconColor,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       SizedBox(

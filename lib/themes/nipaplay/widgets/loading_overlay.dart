@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 import 'typing_text.dart';
 
@@ -395,7 +396,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
       child: _coverImageUrl != null
           ? ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(
+              child: MediaServerAwareNetworkImage(
                 _coverImageUrl!,
                 fit: BoxFit.cover,
                 errorBuilder: (context, error, stackTrace) {

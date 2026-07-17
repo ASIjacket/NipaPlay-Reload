@@ -10,6 +10,7 @@ import 'package:nipaplay/utils/theme_notifier.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_shared_anime_detail_page.dart';
 import 'package:nipaplay/utils/cupertino_settings_colors.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 class CupertinoUserActivity extends StatefulWidget {
   const CupertinoUserActivity({super.key});
@@ -106,8 +107,7 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
   }
 
   Widget _buildSegmentedControl(BuildContext context) {
-    final Color textColor =
-        CupertinoDynamicColor.resolve(
+    final Color textColor = CupertinoDynamicColor.resolve(
       const CupertinoDynamicColor.withBrightness(
         color: CupertinoColors.black,
         darkColor: CupertinoColors.white,
@@ -173,10 +173,7 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
           children: [
             Text(
               error!,
-              style: CupertinoTheme.of(context)
-                  .textTheme
-                  .textStyle
-                  .copyWith(
+              style: CupertinoTheme.of(context).textTheme.textStyle.copyWith(
                     color: CupertinoDynamicColor.resolve(
                       CupertinoColors.systemRed,
                       context,
@@ -215,10 +212,7 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
         child: Center(
           child: Text(
             emptyText,
-            style: CupertinoTheme.of(context)
-                .textTheme
-                .textStyle
-                .copyWith(
+            style: CupertinoTheme.of(context).textTheme.textStyle.copyWith(
                   color: resolveSettingsSecondaryTextColor(context),
                 ),
           ),
@@ -238,17 +232,17 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: EdgeInsets.zero,
-        itemCount: items.length,
-        itemBuilder: (context, index) => _buildActivityTile(items[index]),
-        separatorBuilder: (context, index) => Container(
-          height: 0.5,
-          margin: const EdgeInsets.symmetric(horizontal: 20),
-          color: resolveSettingsSeparatorColor(context),
-        ),
-      ),
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            itemCount: items.length,
+            itemBuilder: (context, index) => _buildActivityTile(items[index]),
+            separatorBuilder: (context, index) => Container(
+              height: 0.5,
+              margin: const EdgeInsets.symmetric(horizontal: 20),
+              color: resolveSettingsSeparatorColor(context),
+            ),
+          ),
         ),
       ),
     );
@@ -267,14 +261,16 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
       subtitle = [
         if (episodeTitle != null && episodeTitle.isNotEmpty)
           context.l10n.userActivityWatchedEpisode(episodeTitle),
-        if (watched.isNotEmpty) context.l10n.userActivityWatchedUpdatedTime(watched),
+        if (watched.isNotEmpty)
+          context.l10n.userActivityWatchedUpdatedTime(watched),
       ].join('\n');
     } else if (_selectedIndex == 1) {
       final String? status = item['favoriteStatus'] as String?;
       final int rating = item['rating'] as int? ?? 0;
       subtitle = [
         if (status != null && status.isNotEmpty)
-          context.l10n.userActivityStatusWithValue(getFavoriteStatusText(status)),
+          context.l10n
+              .userActivityStatusWithValue(getFavoriteStatusText(status)),
         if (rating > 0) context.l10n.userActivityRatingWithValue(rating),
       ].join('\n');
     } else {
@@ -359,14 +355,12 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
       }
     }
 
-    final title =
-        (item['animeTitle'] ?? context.l10n.userActivityUnknownTitle)
-            .toString();
+    final title = (item['animeTitle'] ?? context.l10n.userActivityUnknownTitle)
+        .toString();
     final imageUrl = item['imageUrl'] as String?;
     final rawTime = item['lastWatchedTime'] as String?;
-    final parsed = rawTime != null
-        ? DateTime.tryParse(rawTime)?.toLocal()
-        : null;
+    final parsed =
+        rawTime != null ? DateTime.tryParse(rawTime)?.toLocal() : null;
 
     return SharedRemoteAnimeSummary(
       animeId: animeId,
@@ -400,7 +394,7 @@ class _CupertinoUserActivityState extends State<CupertinoUserActivity>
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
-      child: Image.network(
+      child: MediaServerAwareNetworkImage(
         url,
         width: _thumbnailWidth,
         height: _thumbnailHeight,

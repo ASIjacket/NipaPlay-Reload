@@ -7,6 +7,7 @@ import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/providers/jellyfin_provider.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_server_dialog.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_media_library_sort_sheet.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 class CupertinoNetworkLibraryItemsPage extends StatefulWidget {
   const CupertinoNetworkLibraryItemsPage({
@@ -24,7 +25,8 @@ class CupertinoNetworkLibraryItemsPage extends StatefulWidget {
   final String libraryName;
   final String? librarySubtitle;
   final Color accentColor;
-  final Future<void> Function(MediaServerType type, String mediaId) onOpenDetail;
+  final Future<void> Function(MediaServerType type, String mediaId)
+      onOpenDetail;
 
   @override
   State<CupertinoNetworkLibraryItemsPage> createState() =>
@@ -67,10 +69,9 @@ class _CupertinoNetworkLibraryItemsPageState
 
   bool get _isAtFolderRoot => _folderStack.length <= 1;
 
-  String get _currentTitle =>
-      _isFolderNavigation && _folderStack.isNotEmpty
-          ? _folderStack.last.name
-          : widget.libraryName;
+  String get _currentTitle => _isFolderNavigation && _folderStack.isNotEmpty
+      ? _folderStack.last.name
+      : widget.libraryName;
 
   _SortOption _resolveSortOption(_LibrarySort sort) {
     switch (sort) {
@@ -513,9 +514,8 @@ class _CupertinoNetworkLibraryItemsPageState
     _NetworkMediaGridItem item,
   ) {
     final isFolder = item.isFolder;
-    final IconData icon = isFolder
-        ? CupertinoIcons.folder
-        : CupertinoIcons.play_circle;
+    final IconData icon =
+        isFolder ? CupertinoIcons.folder : CupertinoIcons.play_circle;
     final IconData? trailingIcon =
         isFolder ? CupertinoIcons.chevron_forward : null;
 
@@ -525,8 +525,7 @@ class _CupertinoNetworkLibraryItemsPageState
         leading: Icon(icon, size: 20),
         title: Text(item.title),
         subtitle: isFolder ? const Text('文件夹') : const Text('点击查看详情'),
-        trailing:
-            trailingIcon == null ? null : Icon(trailingIcon, size: 16),
+        trailing: trailingIcon == null ? null : Icon(trailingIcon, size: 16),
         onTap: () {
           if (isFolder) {
             _enterFolder(item);
@@ -677,7 +676,7 @@ class _NetworkMediaPoster extends StatelessWidget {
                 children: [
                   Positioned.fill(
                     child: imageUrl?.isNotEmpty == true
-                        ? Image.network(
+                        ? MediaServerAwareNetworkImage(
                             imageUrl!,
                             fit: BoxFit.cover,
                             filterQuality: FilterQuality.high,
@@ -700,8 +699,8 @@ class _NetworkMediaPoster extends StatelessWidget {
                     right: 0,
                     bottom: 0,
                     child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 12),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,

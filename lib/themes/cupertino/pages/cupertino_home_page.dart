@@ -10,12 +10,12 @@ import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:flutter/material.dart' hide Text;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/jellyfin_model.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 import 'package:nipaplay/models/bangumi_model.dart';
 import 'package:nipaplay/models/search_model.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
@@ -79,7 +79,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
   bool _isLoadingTodayAnimes = false;
   List<_CupertinoRandomRecommendationItem> _randomRecommendations = [];
   bool _isLoadingRandomRecommendations = false;
-  
+
   // 最近添加数据
   Map<String, List<dynamic>> _recentJellyfinItemsByLibrary = {};
   Map<String, List<dynamic>> _recentEmbyItemsByLibrary = {};
@@ -97,7 +97,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
 
   static List<_CupertinoRecommendedItem> _cachedRecommendedItems = [];
   static DateTime? _lastRecommendedLoadTime;
-  
+
   // 最近添加缓存（static以跨页面保持）
   static Map<String, List<dynamic>> _cachedJellyfinItemsByLibrary = {};
   static Map<String, List<dynamic>> _cachedEmbyItemsByLibrary = {};
@@ -157,14 +157,14 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
     if (!_didScheduleInitialLoad) {
       _didScheduleInitialLoad = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _loadRecommendedContent();
-        _loadLatestContent();
-        _loadTodayAnimes();
-        _loadRandomRecommendations();
-      }
-    });
-  }
+        if (mounted) {
+          _loadRecommendedContent();
+          _loadLatestContent();
+          _loadTodayAnimes();
+          _loadRandomRecommendations();
+        }
+      });
+    }
   }
 
   @override
@@ -553,7 +553,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
         final batch = tags.sublist(start, math.min(start + 5, tags.length));
         final futures = batch.map((tag) async {
           try {
-            final result = await SearchService.instance.searchAnimeByTags([tag]);
+            final result =
+                await SearchService.instance.searchAnimeByTags([tag]);
             return _CupertinoRandomTagSearchResult(tag, result.animes);
           } catch (e) {
             debugPrint('CupertinoHomePage: 随机推荐标签搜索失败: $tag, error: $e');
@@ -914,8 +915,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
   Future<String?> _fetchBangumiHighQualityCover(String bangumiId) async {
     try {
       final bangumiServer = await NetworkSettings.getBangumiServer();
-      final uri = Uri.parse(
-          '$bangumiServer/v0/subjects/$bangumiId/image?type=large');
+      final uri =
+          Uri.parse('$bangumiServer/v0/subjects/$bangumiId/image?type=large');
       final response = await http.head(
         WebRemoteAccessService.proxyUri(uri),
         headers: const {'User-Agent': 'NipaPlay/1.0'},
@@ -1085,7 +1086,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
                           child: Column(
                             children: recentItems
                                 .map((item) => Padding(
-                                      padding: const EdgeInsets.only(bottom: 12),
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12),
                                       child: _buildRecentCard(item),
                                     ))
                                 .toList(),
@@ -1349,8 +1351,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
 
     final hasJellyfin =
         showRemoteLibraries && _recentJellyfinItemsByLibrary.isNotEmpty;
-    final hasEmby =
-        showRemoteLibraries && _recentEmbyItemsByLibrary.isNotEmpty;
+    final hasEmby = showRemoteLibraries && _recentEmbyItemsByLibrary.isNotEmpty;
     final hasLocal = showLocalLibrary && _recentLocalItems.isNotEmpty;
     final hasDandan = showRemoteLibraries && _recentDandanGroups.isNotEmpty;
 
@@ -1562,7 +1563,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
                 width: 120,
                 height: 180, // 固定封面高度
                 child: imageUrl != null
-                    ? Image.network(
+                    ? MediaServerAwareNetworkImage(
                         imageUrl,
                         fit: BoxFit.cover,
                         errorBuilder: (context, error, stackTrace) {
@@ -1716,7 +1717,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
       coverUrl: coverUrl,
     );
 
-    Future<List<SharedRemoteEpisode>> episodeLoader({bool force = false}) async {
+    Future<List<SharedRemoteEpisode>> episodeLoader(
+        {bool force = false}) async {
       final episodes = group.episodes.reversed
           .map((episode) => _mapDandanEpisode(episode, provider))
           .whereType<SharedRemoteEpisode>()
@@ -1742,7 +1744,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
         anime: summary,
         hideBackButton: true,
         showCloseButton: true,
-        customEpisodeLoader: ({bool force = false}) => episodeLoader(force: force),
+        customEpisodeLoader: ({bool force = false}) =>
+            episodeLoader(force: force),
         customPlayableBuilder: playableBuilder,
         sourceLabelOverride: provider.serverUrl ?? '弹弹play',
       ),
@@ -1793,9 +1796,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
 
     return SharedRemoteEpisode(
       shareId: 'dandan_$shareKey',
-      title: episode.episodeTitle.isNotEmpty
-          ? episode.episodeTitle
-          : episode.name,
+      title:
+          episode.episodeTitle.isNotEmpty ? episode.episodeTitle : episode.name,
       fileName: episode.name,
       streamPath: streamUrl,
       fileExists: true,
@@ -1880,7 +1882,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
                     borderRadius: BorderRadius.circular(12),
                     child: SizedBox.expand(
                       child: coverUrl != null
-                          ? Image.network(
+                          ? MediaServerAwareNetworkImage(
                               coverUrl,
                               fit: BoxFit.cover,
                               errorBuilder: (_, __, ___) => Container(
@@ -2393,7 +2395,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
     if (thumbnailPath != null &&
         (thumbnailPath.startsWith('http://') ||
             thumbnailPath.startsWith('https://'))) {
-      return CachedNetworkImage(
+      return MediaServerAwareCachedNetworkImage(
         imageUrl: thumbnailPath,
         fit: BoxFit.cover,
         width: double.infinity,
@@ -2557,7 +2559,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
       return placeholder;
     }
     if (path.startsWith('http://') || path.startsWith('https://')) {
-      return Image.network(
+      return MediaServerAwareNetworkImage(
         path,
         fit: fit,
         errorBuilder: (_, __, ___) => placeholder,
@@ -2603,7 +2605,8 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
       builder: (context, snapshot) {
         String? imageUrl;
         if (snapshot.hasData) {
-          imageUrl = snapshot.data!.getString('${_localPrefsKeyPrefix}${item.animeId}');
+          imageUrl = snapshot.data!
+              .getString('${_localPrefsKeyPrefix}${item.animeId}');
         }
 
         if (imageUrl == null || imageUrl.isEmpty) {
@@ -2628,7 +2631,7 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
             Container(color: Colors.white),
             ImageFiltered(
               imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
-              child: CachedNetworkImage(
+              child: MediaServerAwareCachedNetworkImage(
                 imageUrl: imageUrl,
                 fit: BoxFit.cover,
                 width: double.infinity,
@@ -2710,8 +2713,9 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
           if (jellyfinService.isConnected) {
             playbackSession = await jellyfinService.createPlaybackSession(
               itemId: jellyfinId,
-              startPositionMs:
-                  currentItem.lastPosition > 0 ? currentItem.lastPosition : null,
+              startPositionMs: currentItem.lastPosition > 0
+                  ? currentItem.lastPosition
+                  : null,
             );
           } else {
             AdaptiveSnackBar.show(
@@ -2738,8 +2742,9 @@ class _CupertinoHomePageState extends State<CupertinoHomePage> {
           if (embyService.isConnected) {
             playbackSession = await embyService.createPlaybackSession(
               itemId: embyId,
-              startPositionMs:
-                  currentItem.lastPosition > 0 ? currentItem.lastPosition : null,
+              startPositionMs: currentItem.lastPosition > 0
+                  ? currentItem.lastPosition
+                  : null,
             );
           } else {
             AdaptiveSnackBar.show(
