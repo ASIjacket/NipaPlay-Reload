@@ -6,24 +6,24 @@ import 'package:nipaplay/providers/shared_remote_library_provider.dart';
 import 'package:nipaplay/services/remote_control_client_service.dart';
 import 'package:nipaplay/services/remote_control_settings.dart';
 import 'package:nipaplay/services/remote_access_qr_service.dart';
+import 'package:nipaplay/settings/pages/remote_access_receiver_settings_section.dart';
+import 'package:nipaplay/settings/adaptive_settings_widgets.dart';
+import 'package:nipaplay/settings/adaptive_settings_navigation.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_adaptive_platform_ui.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
-import 'package:nipaplay/themes/cupertino/widgets/cupertino_settings_group_card.dart';
-import 'package:nipaplay/themes/cupertino/widgets/cupertino_settings_tile.dart';
-import 'package:nipaplay/utils/cupertino_settings_colors.dart';
 import 'package:provider/provider.dart';
 
-class CupertinoRemoteControllerSettingsPage extends StatefulWidget {
-  const CupertinoRemoteControllerSettingsPage({super.key});
+class UnifiedRemoteAccessSettingsContent extends StatefulWidget {
+  const UnifiedRemoteAccessSettingsContent({super.key});
 
   @override
-  State<CupertinoRemoteControllerSettingsPage> createState() =>
-      _CupertinoRemoteControllerSettingsPageState();
+  State<UnifiedRemoteAccessSettingsContent> createState() =>
+      _UnifiedRemoteAccessSettingsContentState();
 }
 
-class _CupertinoRemoteControllerSettingsPageState
-    extends State<CupertinoRemoteControllerSettingsPage> {
+class _UnifiedRemoteAccessSettingsContentState
+    extends State<UnifiedRemoteAccessSettingsContent> {
   bool _isScanning = false;
   bool _isLoadingState = false;
   String? _matchedBaseUrl;
@@ -194,11 +194,9 @@ class _CupertinoRemoteControllerSettingsPageState
       if (_matchedBaseUrl == null) return;
     }
     if (!mounted) return;
-    await CupertinoBottomSheet.show<void>(
-      context: context,
+    await AdaptiveSettingsNavigation.openChildPage<void>(
+      context,
       title: '遥控器',
-      floatingTitle: true,
-      heightRatio: 0.93,
       child: _RemoteControllerPanel(
         baseUrl: _matchedBaseUrl!,
         hostname: _matchedHostname,
@@ -209,14 +207,6 @@ class _CupertinoRemoteControllerSettingsPageState
 
   @override
   Widget build(BuildContext context) {
-    final backgroundColor = CupertinoDynamicColor.resolve(
-      CupertinoColors.systemGroupedBackground,
-      context,
-    );
-    final sectionBackground = resolveSettingsSectionBackground(context);
-    final tileBackground = resolveSettingsTileBackground(context);
-    final topPadding = MediaQuery.of(context).padding.top + 64;
-
     final label = _matchedHostname?.trim().isNotEmpty == true
         ? _matchedHostname!.trim()
         : (_matchedBaseUrl ?? '未匹配');
@@ -225,123 +215,88 @@ class _CupertinoRemoteControllerSettingsPageState
     final statusText =
         connected ? (receiverEnabled ? '已连接' : '对方已关闭被遥控端') : '未连接';
 
-    return AdaptiveScaffold(
-      appBar: const AdaptiveAppBar(
-        title: '远程访问',
-        useNativeToolbar: true,
-      ),
-      body: ColoredBox(
-        color: backgroundColor,
-        child: SafeArea(
-          top: false,
-          bottom: false,
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(16, topPadding, 16, 32),
-            physics: const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
+    return AdaptiveSettingsPage(
+      children: [
+        const RemoteAccessReceiverSettingsSection(),
+        const SizedBox(height: 24),
+        AdaptiveSettingsSection(
+          children: [
+            AdaptiveSettingsTile<void>.card(
+              title: '控制其他设备',
+              subtitle: '从当前设备连接局域网内的 NipaPlay 被遥控端',
+              icon: CupertinoIcons.dot_radiowaves_left_right,
+              phoneIcon: CupertinoIcons.dot_radiowaves_left_right,
+              enabled: false,
+              onTap: () {},
             ),
-            children: [
-              CupertinoSettingsGroupCard(
-                margin: EdgeInsets.zero,
-                backgroundColor: sectionBackground,
-                addDividers: true,
-                dividerIndent: 16,
-                children: [
-                  CupertinoSettingsTile(
-                    leading: Icon(
-                      CupertinoIcons.dot_radiowaves_left_right,
-                      color: resolveSettingsIconColor(context),
-                    ),
-                    title: const Text('当前匹配设备'),
-                    subtitle: Text(label),
-                    backgroundColor: tileBackground,
-                  ),
-                  CupertinoSettingsTile(
-                    leading: Icon(
-                      connected && receiverEnabled
-                          ? CupertinoIcons.check_mark_circled_solid
-                          : CupertinoIcons.exclamationmark_triangle,
-                      color: connected && receiverEnabled
-                          ? CupertinoColors.activeGreen
-                          : resolveSettingsIconColor(context),
-                    ),
-                    title: const Text('连接状态'),
-                    subtitle: Text(statusText),
-                    backgroundColor: tileBackground,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              CupertinoSettingsGroupCard(
-                margin: EdgeInsets.zero,
-                backgroundColor: sectionBackground,
-                addDividers: true,
-                dividerIndent: 16,
-                children: [
-                  CupertinoSettingsTile(
-                    leading: Icon(
-                      CupertinoIcons.search,
-                      color: resolveSettingsIconColor(context),
-                    ),
-                    title: const Text('自动扫描并匹配'),
-                    subtitle: const Text('默认局域网自动发现设备'),
-                    trailing: _isScanning
-                        ? const CupertinoActivityIndicator(radius: 8)
-                        : null,
-                    backgroundColor: tileBackground,
-                    onTap: _isScanning ? null : _scanAndMatch,
-                  ),
-                  if (RemoteAccessQrCameraScanner.isSupported)
-                    CupertinoSettingsTile(
-                      leading: Icon(
-                        CupertinoIcons.camera,
-                        color: resolveSettingsIconColor(context),
-                      ),
-                      title: const Text('拍摄二维码连接'),
-                      subtitle: const Text('同时连接共享媒体库与遥控器'),
-                      backgroundColor: tileBackground,
-                      onTap: _scanQrAndConnect,
-                    ),
-                  CupertinoSettingsTile(
-                    leading: Icon(
-                      CupertinoIcons.refresh,
-                      color: resolveSettingsIconColor(context),
-                    ),
-                    title: const Text('刷新状态'),
-                    subtitle: const Text('同步目标设备实时播放状态'),
-                    trailing: _isLoadingState
-                        ? const CupertinoActivityIndicator(radius: 8)
-                        : null,
-                    backgroundColor: tileBackground,
-                    onTap: _isLoadingState ? null : _refreshRemoteState,
-                  ),
-                  CupertinoSettingsTile(
-                    leading: Icon(
-                      CupertinoIcons.tv,
-                      color: resolveSettingsIconColor(context),
-                    ),
-                    title: const Text('打开遥控器'),
-                    subtitle: const Text('打开上拉遥控面板'),
-                    showChevron: true,
-                    backgroundColor: tileBackground,
-                    onTap: _openRemotePanel,
-                  ),
-                  CupertinoSettingsTile(
-                    leading: Icon(
-                      CupertinoIcons.trash,
-                      color: resolveSettingsIconColor(context),
-                    ),
-                    title: const Text('清除匹配设备'),
-                    subtitle: const Text('下次将重新自动扫描'),
-                    backgroundColor: tileBackground,
-                    onTap: _matchedBaseUrl == null ? null : _clearMatchedTarget,
-                  ),
-                ],
-              ),
-            ],
-          ),
+            AdaptiveSettingsTile<void>.card(
+              title: '当前匹配设备',
+              subtitle: label,
+              icon: CupertinoIcons.device_phone_portrait,
+              phoneIcon: CupertinoIcons.device_phone_portrait,
+              enabled: false,
+              onTap: () {},
+            ),
+            AdaptiveSettingsTile<void>.card(
+              title: '连接状态',
+              subtitle: statusText,
+              icon: connected && receiverEnabled
+                  ? CupertinoIcons.check_mark_circled_solid
+                  : CupertinoIcons.exclamationmark_triangle,
+              phoneIcon: connected && receiverEnabled
+                  ? CupertinoIcons.check_mark_circled_solid
+                  : CupertinoIcons.exclamationmark_triangle,
+              enabled: false,
+              onTap: () {},
+            ),
+          ],
         ),
-      ),
+        const SizedBox(height: 12),
+        AdaptiveSettingsSection(
+          children: [
+            AdaptiveSettingsTile<void>.card(
+              title: _isScanning ? '正在扫描...' : '自动扫描并匹配',
+              subtitle: '默认局域网自动发现设备',
+              icon: CupertinoIcons.search,
+              phoneIcon: CupertinoIcons.search,
+              enabled: !_isScanning,
+              onTap: _scanAndMatch,
+            ),
+            if (RemoteAccessQrCameraScanner.isSupported)
+              AdaptiveSettingsTile<void>.card(
+                title: '拍摄二维码连接',
+                subtitle: '同时连接共享媒体库与遥控器',
+                icon: CupertinoIcons.camera,
+                phoneIcon: CupertinoIcons.camera,
+                onTap: _scanQrAndConnect,
+              ),
+            AdaptiveSettingsTile<void>.card(
+              title: _isLoadingState ? '正在刷新...' : '刷新状态',
+              subtitle: '同步目标设备实时播放状态',
+              icon: CupertinoIcons.refresh,
+              phoneIcon: CupertinoIcons.refresh,
+              enabled: !_isLoadingState,
+              onTap: _refreshRemoteState,
+            ),
+            AdaptiveSettingsTile<void>.card(
+              title: '打开遥控器',
+              subtitle: '打开上拉遥控面板',
+              icon: CupertinoIcons.tv,
+              phoneIcon: CupertinoIcons.tv,
+              onTap: _openRemotePanel,
+            ),
+            AdaptiveSettingsTile<void>.card(
+              title: '清除匹配设备',
+              subtitle: '下次将重新自动扫描',
+              icon: CupertinoIcons.trash,
+              phoneIcon: CupertinoIcons.trash,
+              enabled: _matchedBaseUrl != null,
+              isDestructive: true,
+              onTap: _clearMatchedTarget,
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -470,11 +425,9 @@ class _RemoteControllerPanelState extends State<_RemoteControllerPanel> {
     final paneId = menu['paneId']?.toString() ?? '';
     final title = menu['title']?.toString() ?? paneId;
     if (paneId.isEmpty) return;
-    await CupertinoBottomSheet.show<void>(
-      context: context,
+    await AdaptiveSettingsNavigation.openChildPage<void>(
+      context,
       title: title,
-      floatingTitle: true,
-      heightRatio: 0.92,
       child: _RemoteMenuPaneSheet(
         baseUrl: widget.baseUrl,
         paneId: paneId,
@@ -870,17 +823,10 @@ class _RemoteMenuPaneSheetState extends State<_RemoteMenuPaneSheet> {
     switch (type) {
       case 'bool':
         final value = param['value'] == true;
-        final toggle = PlatformInfo.isIOS26OrHigher()
-            ? AdaptiveSwitch(
-                value: value,
-                onChanged:
-                    _isSending ? null : (next) => _setParameter(key, next),
-              )
-            : CupertinoSwitch(
-                value: value,
-                onChanged:
-                    _isSending ? null : (next) => _setParameter(key, next),
-              );
+        final toggle = AdaptiveSwitch(
+          value: value,
+          onChanged: _isSending ? null : (next) => _setParameter(key, next),
+        );
         return _row(
           label: label,
           trailing: toggle,
@@ -917,57 +863,31 @@ class _RemoteMenuPaneSheetState extends State<_RemoteMenuPaneSheet> {
     if (min != null && max != null && max > min) {
       final clamped = value.clamp(min, max);
       final sliderActiveColor = CupertinoTheme.of(context).primaryColor;
-      final slider = PlatformInfo.isIOS26OrHigher()
-          ? AdaptiveSlider(
-              value: clamped,
-              min: min,
-              max: max,
-              divisions: isInteger ? (max - min).round() : null,
-              activeColor: sliderActiveColor,
-              onChanged: _isSending
-                  ? null
-                  : (next) {
-                      setState(() {
-                        _draftNumeric[key] = next;
-                      });
-                    },
-              onChangeEnd: _isSending
-                  ? null
-                  : (next) async {
-                      final output = isInteger
-                          ? next.round()
-                          : ((next / step).round() * step);
-                      setState(() {
-                        _draftNumeric.remove(key);
-                      });
-                      await _setParameter(key, output);
-                    },
-            )
-          : CupertinoSlider(
-              value: clamped,
-              min: min,
-              max: max,
-              divisions: isInteger ? (max - min).round() : null,
-              activeColor: sliderActiveColor,
-              onChanged: _isSending
-                  ? null
-                  : (next) {
-                      setState(() {
-                        _draftNumeric[key] = next;
-                      });
-                    },
-              onChangeEnd: _isSending
-                  ? null
-                  : (next) async {
-                      final output = isInteger
-                          ? next.round()
-                          : ((next / step).round() * step);
-                      setState(() {
-                        _draftNumeric.remove(key);
-                      });
-                      await _setParameter(key, output);
-                    },
-            );
+      final slider = AdaptiveSlider(
+        value: clamped,
+        min: min,
+        max: max,
+        divisions: isInteger ? (max - min).round() : null,
+        label: isInteger ? clamped.round().toString() : '$clamped',
+        activeColor: sliderActiveColor,
+        onChanged: _isSending
+            ? null
+            : (next) {
+                setState(() {
+                  _draftNumeric[key] = next;
+                });
+              },
+        onChangeEnd: _isSending
+            ? null
+            : (next) async {
+                final output =
+                    isInteger ? next.round() : ((next / step).round() * step);
+                setState(() {
+                  _draftNumeric.remove(key);
+                });
+                await _setParameter(key, output);
+              },
+      );
       return Column(
         children: [
           _row(
@@ -1032,30 +952,20 @@ class _RemoteMenuPaneSheetState extends State<_RemoteMenuPaneSheet> {
         onPressed: _isSending
             ? null
             : () async {
-                final selected = await showCupertinoModalPopup<dynamic>(
+                final selected =
+                    await CupertinoBottomSheet.showSelection<dynamic>(
                   context: context,
-                  builder: (ctx) {
-                    return CupertinoActionSheet(
-                      title: Text(label),
-                      actions: options
-                          .map(
-                            (option) => CupertinoActionSheetAction(
-                              onPressed: () =>
-                                  Navigator.of(ctx).pop(option['value']),
-                              child: Text(
-                                option['label']?.toString() ??
-                                    option['value']?.toString() ??
-                                    'unknown',
-                              ),
-                            ),
-                          )
-                          .toList(growable: false),
-                      cancelButton: CupertinoActionSheetAction(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text('取消'),
+                  title: label,
+                  options: [
+                    for (final option in options)
+                      CupertinoBottomSheetOption<dynamic>(
+                        label: option['label']?.toString() ??
+                            option['value']?.toString() ??
+                            'unknown',
+                        value: option['value'],
+                        selected: option['value'] == value,
                       ),
-                    );
-                  },
+                  ],
                 );
                 if (selected == null) return;
                 await _setParameter(key, selected);

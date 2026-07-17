@@ -25,6 +25,7 @@ class NipaplayWindowScaffold extends StatefulWidget {
     this.maxWidth = 850,
     this.maxHeightFactor = 0.8,
     this.showCloseButton = true,
+    this.embedded = false,
   });
 
   final Widget child;
@@ -36,6 +37,7 @@ class NipaplayWindowScaffold extends StatefulWidget {
   final double maxWidth;
   final double maxHeightFactor;
   final bool showCloseButton;
+  final bool embedded;
 
   @override
   State<NipaplayWindowScaffold> createState() => _NipaplayWindowScaffoldState();
@@ -136,6 +138,19 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
     });
   }
 
+  void _toggleWindowDisplayMode(AppearanceSettingsProvider settings) {
+    final nextMode =
+        settings.windowDisplayMode == NipaplayWindowDisplayMode.filledScreen
+            ? NipaplayWindowDisplayMode.windowed
+            : NipaplayWindowDisplayMode.filledScreen;
+    if (_offset != Offset.zero) {
+      setState(() {
+        _offset = Offset.zero;
+      });
+    }
+    settings.setWindowDisplayMode(nextMode);
+  }
+
   VoidCallback _resolveCloseHandler(BuildContext context) {
     return widget.onClose ?? () => Navigator.of(context).maybePop();
   }
@@ -203,6 +218,8 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) return widget.child;
+
     final appearanceSettings = context.watch<AppearanceSettingsProvider>();
     final bool useFilledScreenLayout = appearanceSettings.windowDisplayMode ==
         NipaplayWindowDisplayMode.filledScreen;
@@ -213,6 +230,7 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
     final bool useMacStyleCloseButton = _useMacStyleCloseButton();
     final Widget? topRightAction = widget.topRightAction;
     final bool showCloseButton = widget.showCloseButton;
+    final bool usePhoneBottomSheetLayout = globals.isPhone && !globals.isTablet;
     final mediaQuery = MediaQuery.of(context);
     final EdgeInsets safePadding = mediaQuery.padding;
     final Size screenSize = mediaQuery.size;
@@ -244,6 +262,123 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
         .style
         .merge(windowTheme.textTheme.bodyMedium)
         .copyWith(color: textColor);
+
+    if (usePhoneBottomSheetLayout) {
+      final double maxSheetHeight = (screenSize.height - safePadding.top - 12)
+          .clamp(0.0, screenSize.height);
+      const BorderRadius sheetBorderRadius = BorderRadius.vertical(
+        top: Radius.circular(24),
+      );
+      final Widget? phoneTopRightAction = topRightAction;
+
+      return Theme(
+        data: windowTheme,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onClose == null ? null : _handleBackgroundTap,
+            child: Stack(
+              children: [
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: GestureDetector(
+                    onTap: () {},
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: screenSize.width,
+                        maxWidth: screenSize.width,
+                        maxHeight: maxSheetHeight * widget.maxHeightFactor,
+                      ),
+                      child: Material(
+                        color: bgColor,
+                        borderRadius: sheetBorderRadius,
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
+                          children: [
+                            if (widget.backgroundImageUrl != null &&
+                                widget.backgroundImageUrl!.isNotEmpty)
+                              Positioned.fill(
+                                child: ImageFiltered(
+                                  imageFilter: widget.blurBackground
+                                      ? ui.ImageFilter.blur(
+                                          sigmaX: 40,
+                                          sigmaY: 40,
+                                        )
+                                      : ui.ImageFilter.blur(
+                                          sigmaX: 0,
+                                          sigmaY: 0,
+                                        ),
+                                  child: Opacity(
+                                    opacity: isDark ? 0.25 : 0.35,
+                                    child: CachedNetworkImageWidget(
+                                      imageUrl: widget.backgroundImageUrl!,
+                                      fit: BoxFit.cover,
+                                      shouldCompress: false,
+                                      loadMode: CachedImageLoadMode.hybrid,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            Positioned.fill(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      bgColor.withValues(alpha: 0.1),
+                                      bgColor.withValues(alpha: 0.4),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            DefaultTextStyle(
+                              style: windowTextStyle,
+                              child: Padding(
+                                padding: EdgeInsets.only(
+                                  top: _contentTopPadding,
+                                  bottom: safePadding.bottom,
+                                ),
+                                child: widget.child,
+                              ),
+                            ),
+                            if (showCloseButton && phoneTopRightAction == null)
+                              Positioned(
+                                top: windowControlPadding,
+                                right: windowControlPadding,
+                                child: _buildFluentCloseButton(context),
+                              ),
+                            if (phoneTopRightAction != null)
+                              Positioned(
+                                top: windowControlPadding,
+                                right: windowControlPadding,
+                                child: showCloseButton
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          phoneTopRightAction,
+                                          const SizedBox(
+                                            width: _windowControlGap,
+                                          ),
+                                          _buildFluentCloseButton(context),
+                                        ],
+                                      )
+                                    : phoneTopRightAction,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Theme(
       data: windowTheme,
@@ -326,6 +461,10 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
                                   style: windowTextStyle,
                                   child: NipaplayWindowPositionProvider(
                                     onMove: _applyWindowOffset,
+                                    onToggleDisplayMode: () =>
+                                        _toggleWindowDisplayMode(
+                                      appearanceSettings,
+                                    ),
                                     child: Padding(
                                       padding: const EdgeInsets.only(
                                         top: _contentTopPadding,
@@ -341,6 +480,9 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
                                   height: _contentTopPadding,
                                   child: GestureDetector(
                                     behavior: HitTestBehavior.translucent,
+                                    onDoubleTap: () => _toggleWindowDisplayMode(
+                                      appearanceSettings,
+                                    ),
                                     onPanUpdate: (details) =>
                                         _applyWindowOffset(details.delta),
                                   ),
@@ -399,9 +541,11 @@ class _NipaplayWindowScaffoldState extends State<NipaplayWindowScaffold> {
 /// 用于在窗口内容中处理拖动的手势提供者
 class NipaplayWindowPositionProvider extends InheritedWidget {
   final Function(Offset delta) onMove;
+  final VoidCallback onToggleDisplayMode;
 
   const NipaplayWindowPositionProvider({
     required this.onMove,
+    required this.onToggleDisplayMode,
     required super.child,
     super.key,
   });
@@ -444,6 +588,8 @@ class NipaplayWindow {
         ),
       );
     } else {
+      final bool usePhoneBottomSheetLayout =
+          globals.isPhone && !globals.isTablet;
       result = showGeneralDialog<T>(
         context: context,
         barrierDismissible: barrierDismissible,
@@ -462,8 +608,22 @@ class NipaplayWindow {
           }
           final curvedAnimation = CurvedAnimation(
             parent: animation,
-            curve: Curves.easeOutBack,
+            curve: usePhoneBottomSheetLayout
+                ? Curves.easeOutCubic
+                : Curves.easeOutBack,
           );
+          if (usePhoneBottomSheetLayout) {
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).animate(curvedAnimation),
+              child: FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+            );
+          }
           return ScaleTransition(
             scale: Tween<double>(begin: 0.8, end: 1.0).animate(curvedAnimation),
             child: FadeTransition(

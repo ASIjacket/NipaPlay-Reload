@@ -109,7 +109,7 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
     // 订阅播放器内核切换事件
     _playerKernelChangeSubscription = PlayerFactory.onKernelChanged.listen((_) {
       debugPrint('[VideoPlayerState] 收到播放器内核切换事件，执行热切换');
-      PlayerKernelManager.performPlayerKernelHotSwap(this);
+      _requestPlayerKernelHotSwap();
     });
 
     // 订阅弹幕内核切换事件
@@ -118,6 +118,48 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
       debugPrint('[VideoPlayerState] 收到弹幕内核切换事件: $newKernel');
       PlayerKernelManager.performDanmakuKernelHotSwap(this, newKernel);
     });
+  }
+
+  void _requestPlayerKernelHotSwap() {
+    if (_isDisposed) {
+      return;
+    }
+    _playerKernelSwapRequested++;
+    _startPlayerKernelHotSwapDrain();
+  }
+
+  void _startPlayerKernelHotSwapDrain() {
+    if (_isDisposed || _playerKernelSwapDrain != null) {
+      return;
+    }
+    final drain = _drainPlayerKernelHotSwaps();
+    _playerKernelSwapDrain = drain;
+    unawaited(drain);
+  }
+
+  Future<void> _drainPlayerKernelHotSwaps() async {
+    try {
+      while (!_isDisposed &&
+          _playerKernelSwapApplied < _playerKernelSwapRequested) {
+        final targetGeneration = _playerKernelSwapRequested;
+        try {
+          await PlayerKernelManager.performPlayerKernelHotSwap(this);
+        } catch (error, stackTrace) {
+          debugPrint(
+            '[VideoPlayerState] Player hot swap failed '
+            'generation=$targetGeneration: $error\n$stackTrace',
+          );
+        } finally {
+          _playerKernelSwapApplied = targetGeneration;
+        }
+      }
+    } finally {
+      _playerKernelSwapDrain = null;
+      if (!_isDisposed &&
+          _playerKernelSwapApplied < _playerKernelSwapRequested) {
+        _startPlayerKernelHotSwapDrain();
+      }
+    }
   }
 
   Future<void> _loadInitialBrightness() async {
@@ -217,20 +259,12 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
   void _showBrightnessIndicator() {
     if (!globals.isMobilePlatform || _context == null) return;
 
-    final uiThemeProvider =
-        Provider.of<UIThemeProvider>(_context!, listen: false);
-    final bool useCupertinoStyle =
-        uiThemeProvider.isCupertinoTheme && globals.isPhone;
-
     _isBrightnessIndicatorVisible = true;
 
     if (_brightnessOverlayEntry == null) {
       _brightnessOverlayEntry = OverlayEntry(
         builder: (context) {
-          final indicatorWidget = useCupertinoStyle
-              ? const CupertinoBrightnessIndicator()
-              : const BrightnessIndicator();
-          Widget overlayChild = ChangeNotifierProvider<VideoPlayerState>.value(
+          return ChangeNotifierProvider<VideoPlayerState>.value(
             value: this,
             child: Consumer<VideoPlayerState>(
               builder: (context, videoState, _) {
@@ -246,20 +280,13 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
                         0.0,
                         0.0,
                       ),
-                      child: indicatorWidget,
+                      child: const BrightnessIndicator(),
                     ),
                   ),
                 );
               },
             ),
           );
-          if (useCupertinoStyle) {
-            overlayChild = ChangeNotifierProvider<UIThemeProvider>.value(
-              value: uiThemeProvider,
-              child: overlayChild,
-            );
-          }
-          return overlayChild;
         },
       );
       Overlay.of(_context!).insert(_brightnessOverlayEntry!);
@@ -300,20 +327,12 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
   void _showVolumeIndicator() {
     if (_context == null) return;
 
-    final uiThemeProvider =
-        Provider.of<UIThemeProvider>(_context!, listen: false);
-    final bool useCupertinoStyle =
-        uiThemeProvider.isCupertinoTheme && globals.isPhone;
-
     _isVolumeIndicatorVisible = true;
 
     if (_volumeOverlayEntry == null) {
       _volumeOverlayEntry = OverlayEntry(
         builder: (context) {
-          final indicatorWidget = useCupertinoStyle
-              ? const CupertinoVolumeIndicator()
-              : const VolumeIndicator();
-          Widget overlayChild = ChangeNotifierProvider<VideoPlayerState>.value(
+          return ChangeNotifierProvider<VideoPlayerState>.value(
             value: this,
             child: Consumer<VideoPlayerState>(
               builder: (context, videoState, _) {
@@ -329,20 +348,13 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
                         0.0,
                         0.0,
                       ),
-                      child: indicatorWidget,
+                      child: const VolumeIndicator(),
                     ),
                   ),
                 );
               },
             ),
           );
-          if (useCupertinoStyle) {
-            overlayChild = ChangeNotifierProvider<UIThemeProvider>.value(
-              value: uiThemeProvider,
-              child: overlayChild,
-            );
-          }
-          return overlayChild;
         },
       );
       Overlay.of(_context!).insert(_volumeOverlayEntry!);

@@ -1,4 +1,6 @@
 import 'package:fluent_ui/fluent_ui.dart' as fluent;
+import 'package:adaptive_platform_ui/adaptive_platform_ui.dart'
+    show PlatformInfo;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,13 +11,13 @@ import 'package:nipaplay/themes/theme_ids.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/ui_scale_wrapper.dart';
 import 'package:nipaplay/utils/app_theme.dart';
 
-class NipaplayThemeDescriptor extends ThemeDescriptor {
-  const NipaplayThemeDescriptor()
+class DesktopTabletThemeDescriptor extends ThemeDescriptor {
+  const DesktopTabletThemeDescriptor()
       : super(
-          id: ThemeIds.nipaplay,
-          displayName: 'NipaPlay',
+          id: ThemeIds.desktopTablet,
+          displayName: '桌面和平板布局',
           preview: const ThemePreview(
-            title: 'NipaPlay 主题',
+            title: '桌面和平板布局',
             icon: Icons.color_lens_outlined,
             highlights: [
               '浅色/深色界面',
@@ -27,10 +29,12 @@ class NipaplayThemeDescriptor extends ThemeDescriptor {
           supportsDesktop: true,
           supportsPhone: true,
           supportsWeb: false,
+          supportsTelevision: true,
           appBuilder: _buildApp,
         );
 
   static Widget _buildApp(ThemeBuildContext context) {
+    PlatformInfo.setPreferCupertinoControls(false);
     return Consumer<ThemeBackgroundRevealProvider>(
       builder: (buildContext, revealProvider, _) {
         final themeAnimationDuration = revealProvider.isActive
@@ -56,7 +60,7 @@ class NipaplayThemeDescriptor extends ThemeDescriptor {
           ],
           supportedLocales: context.supportedLocales,
           navigatorKey: context.navigatorKey,
-          home: context.materialHomeBuilder(),
+          home: context.buildHome(context.environment.displaySurface),
           builder: (buildContext, appChild) {
             final uiScale =
                 buildContext.select<AppearanceSettingsProvider, double>(

@@ -37,6 +37,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
         await initializePlayer(
           path,
           actualPlayUrl: actualUrl,
+          playbackDetailContext: _playbackDetailContext,
           resetManualDanmakuOffset: false,
         );
       } else {
@@ -56,7 +57,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     _minimalProgressBarColor =
         prefs.getInt(_minimalProgressBarColorKey) ?? 0xFFFF7274;
     _showDanmakuDensityChart =
-        prefs.getBool(_showDanmakuDensityChartKey) ?? false;
+        prefs.getBool(SettingsKeys.showDanmakuDensityChart) ?? false;
     _notifyListeners();
   }
 
@@ -196,7 +197,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   Future<void> _loadPlayerTopButtonVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
     final sendDanmaku =
-        prefs.getBool(_playerTopSendDanmakuButtonVisibleKey) ?? true;
+        prefs.getBool(SettingsKeys.playerTopSendDanmakuButtonVisible) ?? true;
     final skip = prefs.getBool(_playerTopSkipButtonVisibleKey) ?? false;
     final resize = prefs.getBool(_playerTopResizeButtonVisibleKey) ?? false;
     final frameStep =
@@ -217,7 +218,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
 
   Future<void> setPlayerTopSendDanmakuButtonVisible(bool visible) =>
       _setPlayerTopButtonVisibility(
-        key: _playerTopSendDanmakuButtonVisibleKey,
+        key: SettingsKeys.playerTopSendDanmakuButtonVisible,
         currentValue: _playerTopSendDanmakuButtonVisible,
         newValue: visible,
         apply: () => _playerTopSendDanmakuButtonVisible = visible,
@@ -305,14 +306,14 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   Future<void> setShowDanmakuDensityChart(bool show) async {
     _showDanmakuDensityChart = show;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_showDanmakuDensityChartKey, show);
+    await prefs.setBool(SettingsKeys.showDanmakuDensityChart, show);
     _notifyListeners();
   }
 
   // 加载弹幕不透明度
   Future<void> _loadDanmakuOpacity() async {
     final prefs = await SharedPreferences.getInstance();
-    _danmakuOpacity = prefs.getDouble(_danmakuOpacityKey) ?? 1.0;
+    _danmakuOpacity = prefs.getDouble(SettingsKeys.danmakuOpacity) ?? 1.0;
     _notifyListeners();
   }
 
@@ -320,7 +321,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   Future<void> setDanmakuOpacity(double opacity) async {
     _danmakuOpacity = opacity;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_danmakuOpacityKey, opacity);
+    await prefs.setDouble(SettingsKeys.danmakuOpacity, opacity);
     _syncErikaDanmakuConfig();
     _notifyListeners();
   }
@@ -334,7 +335,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   // 加载弹幕可见性
   Future<void> _loadDanmakuVisible() async {
     final prefs = await SharedPreferences.getInstance();
-    _danmakuVisible = prefs.getBool(_danmakuVisibleKey) ?? true;
+    _danmakuVisible = prefs.getBool(SettingsKeys.danmakuVisible) ?? true;
     _notifyListeners();
   }
 
@@ -342,7 +343,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     if (_danmakuVisible != visible) {
       _danmakuVisible = visible;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_danmakuVisibleKey, visible);
+      await prefs.setBool(SettingsKeys.danmakuVisible, visible);
       _syncErikaDanmakuConfig();
       _notifyListeners();
     }
@@ -355,7 +356,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   // 加载弹幕合并设置
   Future<void> _loadMergeDanmaku() async {
     final prefs = await SharedPreferences.getInstance();
-    _mergeDanmaku = prefs.getBool(_mergeDanmakuKey) ?? false;
+    _mergeDanmaku = prefs.getBool(SettingsKeys.mergeDanmaku) ?? false;
     _notifyListeners();
   }
 
@@ -364,7 +365,8 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     if (_mergeDanmaku != merge) {
       _mergeDanmaku = merge;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_mergeDanmakuKey, merge);
+      await prefs.setBool(SettingsKeys.mergeDanmaku, merge);
+      _syncErikaDanmakuConfig();
       _notifyListeners();
     }
   }
@@ -377,7 +379,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   // 加载弹幕堆叠设置
   Future<void> _loadDanmakuStacking() async {
     final prefs = await SharedPreferences.getInstance();
-    _danmakuStacking = prefs.getBool(_danmakuStackingKey) ?? false;
+    _danmakuStacking = prefs.getBool(SettingsKeys.danmakuStacking) ?? false;
     _notifyListeners();
   }
 
@@ -385,7 +387,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   Future<void> _loadDanmakuRandomColorEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     _danmakuRandomColorEnabled =
-        prefs.getBool(_danmakuRandomColorEnabledKey) ?? false;
+        prefs.getBool(SettingsKeys.danmakuRandomColorEnabled) ?? false;
     _notifyListeners();
   }
 
@@ -393,7 +395,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   Future<void> _loadTimelineDanmakuEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     _isTimelineDanmakuEnabled =
-        prefs.getBool(_timelineDanmakuEnabledKey) ?? true;
+        prefs.getBool(SettingsKeys.timelineDanmakuEnabled) ?? true;
     _notifyListeners();
   }
 
@@ -414,7 +416,8 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     if (_danmakuStacking != stacking) {
       _danmakuStacking = stacking;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_danmakuStackingKey, stacking);
+      await prefs.setBool(SettingsKeys.danmakuStacking, stacking);
+      _syncErikaDanmakuConfig();
       _notifyListeners();
     }
   }
@@ -426,7 +429,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     }
     _danmakuRandomColorEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_danmakuRandomColorEnabledKey, enabled);
+    await prefs.setBool(SettingsKeys.danmakuRandomColorEnabled, enabled);
     _updateMergedDanmakuList();
   }
 
@@ -1365,7 +1368,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   // 加载弹幕字体大小
   Future<void> _loadDanmakuFontSize() async {
     final prefs = await SharedPreferences.getInstance();
-    _danmakuFontSize = prefs.getDouble(_danmakuFontSizeKey) ?? 0.0;
+    _danmakuFontSize = prefs.getDouble(SettingsKeys.danmakuFontSize) ?? 0.0;
     _notifyListeners();
   }
 
@@ -1386,9 +1389,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   }
 
   DanmakuOutlineStyle _resolveDanmakuOutlineStyle(int? index) {
-    final DanmakuOutlineStyle fallback = globals.isMobilePlatform
-        ? DanmakuOutlineStyle.stroke
-        : DanmakuOutlineStyle.uniform;
+    final fallback = _defaultDanmakuOutlineStyle;
     if (index == null ||
         index < 0 ||
         index >= DanmakuOutlineStyle.values.length) {
@@ -1396,6 +1397,11 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     }
     return DanmakuOutlineStyle.values[index];
   }
+
+  DanmakuOutlineStyle get _defaultDanmakuOutlineStyle =>
+      globals.isMobilePlatform
+          ? DanmakuOutlineStyle.stroke
+          : DanmakuOutlineStyle.uniform;
 
   DanmakuShadowStyle _resolveDanmakuShadowStyle(int? index) {
     if (index == null ||
@@ -1492,17 +1498,17 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   Future<void> _loadDanmakuDisplayEffectSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final loadedFontFilePath =
-        (prefs.getString(_danmakuFontFilePathKey) ?? '').trim();
+        (prefs.getString(SettingsKeys.danmakuFontFilePath) ?? '').trim();
     var loadedFontFamily =
-        (prefs.getString(_danmakuFontFamilyKey) ?? '').trim();
+        (prefs.getString(SettingsKeys.danmakuFontFamily) ?? '').trim();
     final loadedOutlineStyle = _resolveDanmakuOutlineStyle(
-      prefs.getInt(_danmakuOutlineStyleKey),
+      prefs.getInt(SettingsKeys.danmakuOutlineStyle),
     );
     final loadedShadowStyle = _resolveDanmakuShadowStyle(
-      prefs.getInt(_danmakuShadowStyleKey),
+      prefs.getInt(SettingsKeys.danmakuShadowStyle),
     );
     final loadedNext2OutlineWidth = _sanitizeNext2DanmakuOutlineWidth(
-      prefs.getDouble(_next2DanmakuOutlineWidthKey),
+      prefs.getDouble(SettingsKeys.next2DanmakuOutlineWidth),
     );
 
     var effectiveFontPath = loadedFontFilePath;
@@ -1536,16 +1542,16 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     _next2DanmakuOutlineWidth = loadedNext2OutlineWidth;
 
     if (loadedFontFilePath != effectiveFontPath) {
-      await prefs.setString(_danmakuFontFilePathKey, effectiveFontPath);
+      await prefs.setString(SettingsKeys.danmakuFontFilePath, effectiveFontPath);
     }
-    if ((prefs.getString(_danmakuFontFamilyKey) ?? '').trim() !=
+    if ((prefs.getString(SettingsKeys.danmakuFontFamily) ?? '').trim() !=
         loadedFontFamily) {
-      await prefs.setString(_danmakuFontFamilyKey, loadedFontFamily);
+      await prefs.setString(SettingsKeys.danmakuFontFamily, loadedFontFamily);
     }
-    if ((prefs.getDouble(_next2DanmakuOutlineWidthKey) ?? -1.0) !=
+    if ((prefs.getDouble(SettingsKeys.next2DanmakuOutlineWidth) ?? -1.0) !=
         loadedNext2OutlineWidth) {
       await prefs.setDouble(
-        _next2DanmakuOutlineWidthKey,
+        SettingsKeys.next2DanmakuOutlineWidth,
         loadedNext2OutlineWidth,
       );
     }
@@ -1563,8 +1569,9 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     _danmakuFontFilePath = '';
     _danmakuFontFamily = normalized;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_danmakuFontFilePathKey, '');
-    await prefs.setString(_danmakuFontFamilyKey, normalized);
+    await prefs.setString(SettingsKeys.danmakuFontFilePath, '');
+    await prefs.setString(SettingsKeys.danmakuFontFamily, normalized);
+    _syncErikaDanmakuConfig();
     _notifyListeners();
   }
 
@@ -1588,8 +1595,9 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     _danmakuFontFilePath = persistedPath;
     _danmakuFontFamily = runtimeFamily;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_danmakuFontFilePathKey, persistedPath);
-    await prefs.setString(_danmakuFontFamilyKey, runtimeFamily);
+    await prefs.setString(SettingsKeys.danmakuFontFilePath, persistedPath);
+    await prefs.setString(SettingsKeys.danmakuFontFamily, runtimeFamily);
+    _syncErikaDanmakuConfig();
     _notifyListeners();
     return true;
   }
@@ -1601,19 +1609,48 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     _danmakuFontFilePath = '';
     _danmakuFontFamily = '';
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_danmakuFontFilePathKey, '');
-    await prefs.setString(_danmakuFontFamilyKey, '');
+    await prefs.setString(SettingsKeys.danmakuFontFilePath, '');
+    await prefs.setString(SettingsKeys.danmakuFontFamily, '');
+    _syncErikaDanmakuConfig();
     _notifyListeners();
   }
 
-  Future<void> setDanmakuOutlineStyle(DanmakuOutlineStyle style) async {
-    if (_danmakuOutlineStyle == style) {
+  /// 设置弹幕描边样式和宽度
+  Future<void> _setDanmakuOutlineConfiguration(DanmakuOutlineStyle style, double outlineWidth) async {
+
+    final sanitizedWidth = _sanitizeNext2DanmakuOutlineWidth(outlineWidth);
+    if (_danmakuOutlineStyle == style &&
+        (_next2DanmakuOutlineWidth - sanitizedWidth).abs() < 0.0001) {
       return;
     }
     _danmakuOutlineStyle = style;
+    _next2DanmakuOutlineWidth = sanitizedWidth;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_danmakuOutlineStyleKey, style.index);
+    await prefs.setInt(SettingsKeys.danmakuOutlineStyle, style.index);
+    await prefs.setDouble(
+      SettingsKeys.next2DanmakuOutlineWidth,
+      sanitizedWidth,
+    );
+    _syncErikaDanmakuConfig();
     _notifyListeners();
+  }
+
+  /// 设置是否启用弹幕描边
+  Future<void> setDanmakuOutlineEnabled(bool enabled) async {
+    final style = enabled
+        ? (_danmakuOutlineStyle == DanmakuOutlineStyle.none
+            ? _defaultDanmakuOutlineStyle
+            : _danmakuOutlineStyle)
+        : DanmakuOutlineStyle.none;
+    await _setDanmakuOutlineConfiguration(style, enabled ? 1.0 : 0.0);
+  }
+
+  /// 设置弹幕描边样式
+  Future<void> setDanmakuOutlineStyle(DanmakuOutlineStyle style) async {
+    await _setDanmakuOutlineConfiguration(
+      style,
+      style == DanmakuOutlineStyle.none ? 0.0 : 1.0,
+    );
   }
 
   Future<void> setDanmakuShadowStyle(DanmakuShadowStyle style) async {
@@ -1622,19 +1659,19 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     }
     _danmakuShadowStyle = style;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_danmakuShadowStyleKey, style.index);
+    await prefs.setInt(SettingsKeys.danmakuShadowStyle, style.index);
     _notifyListeners();
   }
 
+  /// 设置下一条弹幕的描边宽度
   Future<void> setNext2DanmakuOutlineWidth(double value) async {
     final sanitized = _sanitizeNext2DanmakuOutlineWidth(value);
-    if ((_next2DanmakuOutlineWidth - sanitized).abs() < 0.0001) {
-      return;
-    }
-    _next2DanmakuOutlineWidth = sanitized;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_next2DanmakuOutlineWidthKey, sanitized);
-    _notifyListeners();
+    final style = sanitized > 0.0
+        ? (_danmakuOutlineStyle == DanmakuOutlineStyle.none
+            ? _defaultDanmakuOutlineStyle
+            : _danmakuOutlineStyle)
+        : DanmakuOutlineStyle.none;
+    await _setDanmakuOutlineConfiguration(style, sanitized);
   }
 
   // 获取实际使用的弹幕字体大小
@@ -2248,7 +2285,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
   // 加载弹幕轨道显示区域
   Future<void> _loadDanmakuDisplayArea() async {
     final prefs = await SharedPreferences.getInstance();
-    _danmakuDisplayArea = prefs.getDouble(_danmakuDisplayAreaKey) ?? 1.0;
+    _danmakuDisplayArea = prefs.getDouble(SettingsKeys.danmakuDisplayArea) ?? 1.0;
     _notifyListeners();
   }
 
@@ -2257,7 +2294,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     if (_danmakuDisplayArea != area) {
       _danmakuDisplayArea = area;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble(_danmakuDisplayAreaKey, area);
+      await prefs.setDouble(SettingsKeys.danmakuDisplayArea, area);
       _syncErikaDanmakuConfig();
       _notifyListeners();
     }
@@ -2275,14 +2312,14 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
 
   Future<void> _loadDanmakuSpeedMultiplier() async {
     final prefs = await SharedPreferences.getInstance();
-    final stored = prefs.getDouble(_danmakuSpeedMultiplierKey);
+    final stored = prefs.getDouble(SettingsKeys.danmakuSpeedMultiplier);
     _danmakuSpeedMultiplier = _normalizeDanmakuSpeed(stored ?? 1.0);
     _notifyListeners();
   }
 
   Future<void> _loadRememberDanmakuOffset() async {
     final prefs = await SharedPreferences.getInstance();
-    final resolved = prefs.getBool(_rememberDanmakuOffsetKey) ?? false;
+    final resolved = prefs.getBool(SettingsKeys.rememberDanmakuOffset) ?? false;
     if (_rememberDanmakuOffset != resolved) {
       _rememberDanmakuOffset = resolved;
       _notifyListeners();
@@ -2296,7 +2333,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       return;
     }
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_rememberDanmakuOffsetKey, remember);
+    await prefs.setBool(SettingsKeys.rememberDanmakuOffset, remember);
     _rememberDanmakuOffset = remember;
     _notifyListeners();
   }
@@ -2308,14 +2345,15 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     }
     _danmakuSpeedMultiplier = normalized;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_danmakuSpeedMultiplierKey, normalized);
+    await prefs.setDouble(SettingsKeys.danmakuSpeedMultiplier, normalized);
+    _syncErikaDanmakuConfig();
     _notifyListeners();
   }
 
   Future<void> _loadDanmakuDfmPlusTrackGap() async {
     final prefs = await SharedPreferences.getInstance();
     _danmakuDfmPlusTrackGap =
-        prefs.getDouble(_danmakuDfmPlusTrackGapKey) ?? 0.15;
+        prefs.getDouble(SettingsKeys.danmakuDfmPlusTrackGap) ?? 0.15;
     _notifyListeners();
   }
 
@@ -2326,7 +2364,8 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     }
     _danmakuDfmPlusTrackGap = normalized;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_danmakuDfmPlusTrackGapKey, normalized);
+    await prefs.setDouble(SettingsKeys.danmakuDfmPlusTrackGap, normalized);
+    _syncErikaDanmakuConfig();
     _notifyListeners();
   }
 

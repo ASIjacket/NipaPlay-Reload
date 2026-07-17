@@ -5,17 +5,18 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:provider/provider.dart';
 
 import 'package:nipaplay/providers/appearance_settings_provider.dart';
+import 'package:nipaplay/app/app_display_surface.dart';
 import 'package:nipaplay/themes/theme_descriptor.dart';
 import 'package:nipaplay/themes/theme_ids.dart';
 import 'package:nipaplay/utils/app_theme.dart';
 
-class CupertinoThemeDescriptor extends ThemeDescriptor {
-  const CupertinoThemeDescriptor()
+class PhoneThemeDescriptor extends ThemeDescriptor {
+  const PhoneThemeDescriptor()
       : super(
-          id: ThemeIds.cupertino,
-          displayName: 'Cupertino',
+          id: ThemeIds.phone,
+          displayName: '手机布局',
           preview: const ThemePreview(
-            title: 'Cupertino 主题',
+            title: '手机布局',
             icon: CupertinoIcons.device_phone_portrait,
             highlights: [
               '贴近原生 iOS 体验',
@@ -31,6 +32,7 @@ class CupertinoThemeDescriptor extends ThemeDescriptor {
         );
 
   static Widget _buildApp(ThemeBuildContext context) {
+    PlatformInfo.setPreferCupertinoControls(true);
     return Consumer<AppearanceSettingsProvider>(
       builder: (_, appearanceSettings, __) {
         final accentColor = appearanceSettings.accentColorPreset.color;
@@ -61,7 +63,7 @@ class CupertinoThemeDescriptor extends ThemeDescriptor {
               locale: context.locale,
               localizationsDelegates: context.localizationsDelegates,
               supportedLocales: context.supportedLocales,
-              home: context.cupertinoHomeBuilder(),
+              home: context.buildHome(AppDisplaySurface.phone),
               builder: (buildContext, appChild) {
                 final child = context.overlayBuilder(
                   appChild ?? const SizedBox.shrink(),
@@ -70,7 +72,7 @@ class CupertinoThemeDescriptor extends ThemeDescriptor {
                   return child;
                 }
                 return DefaultTextStyle.merge(
-                  style: TextStyle(decoration: TextDecoration.none),
+                  style: const TextStyle(decoration: TextDecoration.none),
                   child: child,
                 );
               },

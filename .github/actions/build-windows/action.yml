@@ -19,11 +19,13 @@ runs:
       run: flutter precache --windows
 
     - name: Setup Rust for Erika native core
+      if: env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1'
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: x86_64-pc-windows-msvc
 
     - name: Setup MSYS2 tools for Erika native dependencies
+      if: env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1'
       uses: msys2/setup-msys2@v2
       with:
         msystem: UCRT64
@@ -37,8 +39,12 @@ runs:
           make
           tar
           diffutils
+          coreutils
+          pkgconf
+          perl
 
     - name: Configure Erika Windows native build
+      if: env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1'
       shell: pwsh
       run: |
         git config --global core.longpaths true
@@ -69,25 +75,40 @@ runs:
         if (-not (Test-Path "C:\msys64\usr\bin\make.exe")) {
           throw "MSYS2 make.exe was not found"
         }
+        if (-not (Test-Path "C:\msys64\usr\bin\false.exe")) {
+          throw "MSYS2 false.exe was not found"
+        }
 
     - name: Cache Erika Cargo dependencies
+      if: env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1'
       uses: actions/cache@v4
       with:
         path: |
-          ${{ env.USERPROFILE }}\.cargo\registry
-          ${{ env.USERPROFILE }}\.cargo\git
-        key: windows-erika-cargo-${{ hashFiles('pubspec.lock') }}-v1
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: windows-erika-cargo-${{ env.ERIKA_SHA || hashFiles('pubspec.lock') }}-v1
         restore-keys: |
+          windows-erika-cargo-${{ env.ERIKA_SHA }}-
           windows-erika-cargo-
 
     - name: Restore Erika native dependency bundle
+      if: env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1'
       id: restore-erika-native-deps
       uses: actions/cache/restore@v4
       with:
         path: |
-          ${{ env.LOCALAPPDATA }}\Pub\Cache\git\Erika-*\third_party\cache
-          ${{ env.LOCALAPPDATA }}\Pub\Cache\git\Erika-*\third_party\dist\x86_64-pc-windows-msvc\lgpl
-        key: windows-erika-native-${{ hashFiles('pubspec.lock') }}-v1
+          ~/.pub-cache/git/Erika-*/third_party/dist/x86_64-pc-windows-msvc/lgpl
+        key: windows-erika-native-x86_64-pc-windows-msvc-lgpl-${{ env.ERIKA_SHA || hashFiles('pubspec.lock') }}-v1
+        restore-keys: |
+          windows-erika-native-x86_64-pc-windows-msvc-lgpl-
+
+    - name: Restore Erika native source archives
+      if: env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1'
+      id: restore-erika-native-sources
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.pub-cache/git/Erika-*/third_party/cache
+        key: windows-erika-native-sources-v1
 
     - name: Setup Chinese Font for Windows
       shell: pwsh
@@ -153,6 +174,18 @@ runs:
           return $true
         }
 
+        function Get-MdkSdkReleaseAsset {
+          param(
+            [object]$Release,
+            [string[]]$Patterns
+          )
+          foreach ($pattern in $Patterns) {
+            $asset = $Release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+            if ($asset) { return $asset }
+          }
+          return $null
+        }
+
         $candidates = @(
           "https://sourceforge.net/projects/mdk-sdk/files/nightly/$mdkSdkPkg/download",
           "https://downloads.sourceforge.net/project/mdk-sdk/nightly/$mdkSdkPkg",
@@ -183,10 +216,35 @@ runs:
         }
 
         if (-not $downloaded) {
-          $ghPkg = "mdk-sdk-windows-x64.7z"
-          $ghUrl = "https://github.com/wang-bin/mdk-sdk/releases/latest/download/$ghPkg"
+          $releaseApi = "https://api.github.com/repos/wang-bin/mdk-sdk/releases/latest"
+          $headers = @{
+            "User-Agent" = "NipaPlay-Build"
+            "Accept" = "application/vnd.github+json"
+          }
+          if ($env:GITHUB_TOKEN) {
+            $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
+          }
+          try {
+            $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers -UseBasicParsing -TimeoutSec 60
+          } catch {
+            throw "Unable to query mdk-sdk latest release: $($_.Exception.Message)"
+          }
+          $assetPatterns = @(
+            "^mdk-sdk-windows-x64-vs[0-9]+\.7z$",
+            "^mdk-sdk-windows-vs[0-9]+\.7z$",
+            "^mdk-sdk-windows-x64\.7z$",
+            "^mdk-sdk-windows\.7z$",
+            "^mdk-sdk-windows-vs[0-9]+-ltl\.7z$"
+          )
+          $asset = Get-MdkSdkReleaseAsset -Release $release -Patterns $assetPatterns
+          if (-not $asset) {
+            $available = ($release.assets | ForEach-Object { $_.name }) -join ", "
+            throw "No compatible Windows mdk-sdk asset found in $($release.tag_name). Available assets: $available"
+          }
+          $ghPkg = $asset.name
+          $ghUrl = $asset.browser_download_url
           $archivePath = Join-Path $fvpDir "windows\$ghPkg"
-          Write-Host "SourceForge mirrors unavailable; falling back to GitHub release $ghUrl ..."
+          Write-Host "SourceForge mirrors unavailable; falling back to GitHub release $($release.tag_name) asset $ghPkg ..."
           Invoke-WebRequest -Uri $ghUrl -OutFile $archivePath -UseBasicParsing -TimeoutSec 180 -Headers $ua
           if (-not (Test-SevenZip $archivePath)) {
             throw "GitHub fallback download was not a valid 7z archive: $archivePath"
@@ -301,9 +359,85 @@ runs:
       id: build
       shell: pwsh
       run: |
+        function Show-ErikaNativeDiagnostics {
+          Write-Host "::group::Erika native diagnostics"
+          try {
+            $patterns = @()
+            if ($env:LOCALAPPDATA) {
+              $patterns += Join-Path $env:LOCALAPPDATA "Pub\Cache\git\Erika-*"
+            }
+            if ($env:USERPROFILE) {
+              $patterns += Join-Path $env:USERPROFILE ".pub-cache\git\Erika-*"
+            }
+            $patterns += "windows\flutter\ephemeral\.plugin_symlinks\erika_flutter"
+
+            $roots = @()
+            foreach ($pattern in $patterns) {
+              $roots += Get-ChildItem -Path $pattern -Directory -ErrorAction SilentlyContinue
+            }
+            if (-not $roots) {
+              Write-Host "No Erika checkout found in Pub cache or plugin symlinks."
+              return
+            }
+
+            $roots = $roots | Sort-Object FullName -Unique
+            foreach ($root in $roots) {
+              Write-Host "Erika root: $($root.FullName)"
+              $thirdParty = Join-Path $root.FullName "third_party"
+              if (-not (Test-Path $thirdParty)) {
+                Write-Host "third_party directory is missing."
+                continue
+              }
+
+              Write-Host "third_party top-level directories:"
+              Get-ChildItem -Path $thirdParty -Directory -ErrorAction SilentlyContinue |
+                Select-Object -First 20 |
+                ForEach-Object { Write-Host "  $($_.FullName)" }
+
+              $metadataFiles = Get-ChildItem -Path $thirdParty -Recurse -File -Filter "erika-native-deps.txt" -ErrorAction SilentlyContinue
+              foreach ($file in $metadataFiles) {
+                Write-Host "--- $($file.FullName) ---"
+                Get-Content -Path $file.FullName -Tail 200 -ErrorAction SilentlyContinue
+              }
+
+              $logFiles = Get-ChildItem -Path $thirdParty -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.FullName -match "[\\/]ffbuild[\\/]config\.log$" -or
+                  $_.Name -in @("config.log", "build.log")
+                } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 8
+              foreach ($file in $logFiles) {
+                Write-Host "--- tail $($file.FullName) ---"
+                Get-Content -Path $file.FullName -Tail 300 -ErrorAction SilentlyContinue
+              }
+            }
+          } finally {
+            Write-Host "::endgroup::"
+          }
+        }
+
         # --obfuscate + --split-debug-info：Dart 代码混淆 + 分离调试符号（体积↓ + 反逆向）
         # symbol map 由 workflow 的 dart-symbols-* artifact 上传，用于 crash stack 反混淆
-        flutter build windows --release --no-pub --obfuscate --split-debug-info=build/symbols-windows
+        $flutterArgs = @(
+          "build",
+          "windows",
+          "--release",
+          "--no-pub",
+          "--obfuscate",
+          "--split-debug-info=build/symbols-windows"
+        )
+        if ($env:NIPAPLAY_VERBOSE_WINDOWS_BUILD -ne "0") {
+          $flutterArgs += "--verbose"
+        }
+        Write-Host "Running: flutter $($flutterArgs -join ' ')"
+        & flutter @flutterArgs
+        $flutterExitCode = $LASTEXITCODE
+        if ($flutterExitCode -ne 0) {
+          Show-ErikaNativeDiagnostics
+          throw "flutter build windows failed with exit code $flutterExitCode"
+        }
+
         $arch = "x64"
         $version = "${{ inputs.app-version }}"
         $DestDir = "build\windows\NipaPlay_${version}_Windows_x64"
@@ -325,13 +459,19 @@ runs:
         echo "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
 
     - name: Save Erika native dependency bundle
-      if: steps.restore-erika-native-deps.outputs.cache-hit != 'true'
+      if: (env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1') && steps.restore-erika-native-deps.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: |
-          ${{ env.LOCALAPPDATA }}\Pub\Cache\git\Erika-*\third_party\cache
-          ${{ env.LOCALAPPDATA }}\Pub\Cache\git\Erika-*\third_party\dist\x86_64-pc-windows-msvc\lgpl
+          ~/.pub-cache/git/Erika-*/third_party/dist/x86_64-pc-windows-msvc/lgpl
         key: ${{ steps.restore-erika-native-deps.outputs.cache-primary-key }}
+
+    - name: Save Erika native source archives
+      if: always() && (env.ERIKA_PREBUILT != '1' || env.ERIKA_FORCE_SOURCE_BUILD == '1') && steps.restore-erika-native-sources.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.pub-cache/git/Erika-*/third_party/cache
+        key: ${{ steps.restore-erika-native-sources.outputs.cache-primary-key }}
 
     - name: Install Inno Setup
       shell: pwsh

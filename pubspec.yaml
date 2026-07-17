@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.10.11
+version: 1.11.1
 
 environment:
   sdk: ^3.5.3
@@ -84,10 +84,12 @@ dependencies:
   erika_flutter:
     git:
       url: https://github.com/AimesSoft/Erika.git
-      ref: main
+      # Keep Nipa reproducible while Erika Android support is under review.
+      # Move this back to main after AimesSoft/Erika#42 is merged.
+      ref: be8192d223f32a1bec512b935446999d3694ddff
       path: packages/erika_flutter
   qr_flutter: ^4.1.0  # 用于生成二维码
-  qr_code_scanner_plus: ^2.0.12
+  mobile_scanner: ^7.2.0
   flutter_svg: ^2.0.14  # 用于显示SVG图标
   flutter_markdown: ^0.7.1
   desktop_drop: ^0.6.1
@@ -97,6 +99,7 @@ dependencies:
   system_info2: ^3.0.1
   hotkey_manager: ^0.2.3
   adaptive_platform_ui: ^0.1.98
+  liquid_glass_widgets: ^0.21.3
   dynamic_color: ^1.6.0
   fluent_ui: ^4.13.0
   ffi: ^2.1.3
