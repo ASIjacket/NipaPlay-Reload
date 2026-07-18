@@ -12,7 +12,6 @@ import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_card.dart';
-import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
@@ -30,6 +29,141 @@ import 'package:nipaplay/app/app_display_surface_scope.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 
 enum NetworkMediaServerType { jellyfin, emby }
+
+class NetworkMediaSortChoice {
+  const NetworkMediaSortChoice({
+    required this.sortBy,
+    required this.sortOrder,
+    required this.label,
+    required this.description,
+    required this.isSelected,
+  });
+
+  final String sortBy;
+  final String sortOrder;
+  final String label;
+  final String description;
+  final bool isSelected;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NetworkMediaSortChoice &&
+          sortBy == other.sortBy &&
+          sortOrder == other.sortOrder;
+
+  @override
+  int get hashCode => Object.hash(sortBy, sortOrder);
+}
+
+List<NetworkMediaSortChoice> buildNetworkMediaSortChoices(
+  MediaLibraryType libraryType, {
+  required String currentSortBy,
+  required String currentSortOrder,
+}) {
+  return <NetworkMediaSortChoice>[
+    for (final option in getMediaSortOptions(libraryType))
+      for (final order in mediaLibrarySortOrders)
+        if (order['value'] case final String sortOrderValue)
+          if (order['label'] case final String sortOrderLabel)
+            NetworkMediaSortChoice(
+              sortBy: option.value,
+              sortOrder: sortOrderValue,
+              label: '${option.label} ($sortOrderLabel)',
+              description: option.description,
+              isSelected: option.value == currentSortBy &&
+                  sortOrderValue == currentSortOrder,
+            ),
+  ];
+}
+
+Future<NetworkMediaSortChoice?> showAdaptiveNetworkMediaSortDialog(
+  BuildContext context, {
+  required MediaLibraryType libraryType,
+  required String currentSortBy,
+  required String currentSortOrder,
+}) {
+  final choices = buildNetworkMediaSortChoices(
+    libraryType,
+    currentSortBy: currentSortBy,
+    currentSortOrder: currentSortOrder,
+  );
+
+  if (AppDisplaySurfaceScope.of(context) == AppDisplaySurface.phone) {
+    return CupertinoBottomSheet.showSelection<NetworkMediaSortChoice>(
+      context: context,
+      title: '排序',
+      options: <CupertinoBottomSheetOption<NetworkMediaSortChoice>>[
+        for (final choice in choices)
+          CupertinoBottomSheetOption<NetworkMediaSortChoice>(
+            label: choice.label,
+            value: choice,
+            selected: choice.isSelected,
+          ),
+      ],
+    );
+  }
+
+  return showDialog<NetworkMediaSortChoice>(
+    context: context,
+    barrierColor: Colors.black.withValues(alpha: 0.54),
+    builder: (dialogContext) => Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 240, vertical: 120),
+      child: NipaplayLargeScreenPanel(
+        padding: const EdgeInsets.all(18),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 560, maxWidth: 560),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const NipaplayLargeScreenSectionHeader(
+                title: '排序',
+                subtitle: '选择当前媒体库的排序方式',
+              ),
+              const SizedBox(height: 14),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: choices.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final choice = choices[index];
+                    return NipaplayLargeScreenFocusableAction(
+                      autofocus: index == 0,
+                      onActivate: () => Navigator.of(context).pop(choice),
+                      borderRadius: BorderRadius.circular(8),
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            choice.label,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            choice.description,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.62),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
 // 通用媒体项接口
 abstract class NetworkMediaItem {
@@ -549,7 +683,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
           NipaplayLargeScreenActionButton(
             icon: Icons.sort_rounded,
             label: '排序',
-            onPressed: _showLargeScreenRemoteSortDialog,
+            onPressed: _showRemoteSortDialog,
           ),
           const SizedBox(width: 10),
         ],
@@ -921,78 +1055,14 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
     }
   }
 
-  Future<void> _showLargeScreenRemoteSortDialog() async {
+  Future<void> _showRemoteSortDialog() async {
     final provider = _provider;
     final currentSortSettings = _getCurrentRemoteSortSettings(provider);
-    final items = _buildRemoteSortItems(
-      currentSortSettings['sortBy']!,
-      currentSortSettings['sortOrder']!,
-    );
-    final selection = await showDialog<_RemoteSortSelection>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.54),
-      builder: (context) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding:
-              const EdgeInsets.symmetric(horizontal: 240, vertical: 120),
-          child: NipaplayLargeScreenPanel(
-            padding: const EdgeInsets.all(18),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 560, maxWidth: 560),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const NipaplayLargeScreenSectionHeader(
-                    title: '排序',
-                    subtitle: '选择当前媒体库的排序方式',
-                  ),
-                  const SizedBox(height: 14),
-                  Expanded(
-                    child: ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        final value = item.value;
-                        final description = value.description;
-                        return NipaplayLargeScreenFocusableAction(
-                          autofocus: index == 0,
-                          onActivate: () => Navigator.of(context).pop(value),
-                          borderRadius: BorderRadius.circular(8),
-                          padding: const EdgeInsets.all(14),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item.title,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              if (description?.isNotEmpty == true) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  description!,
-                                  style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.62),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+    final selection = await showAdaptiveNetworkMediaSortDialog(
+      context,
+      libraryType: _mediaLibraryType,
+      currentSortBy: currentSortSettings['sortBy']!,
+      currentSortOrder: currentSortSettings['sortOrder']!,
     );
     if (selection != null) {
       _applyRemoteSortSelection(selection);
@@ -1967,32 +2037,8 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
       label: '排序',
       desktopIcon: Icons.sort_rounded,
       phoneIcon: cupertino.CupertinoIcons.arrow_up_arrow_down,
-      onPressed: _showAdaptiveRemoteSortDialog,
+      onPressed: _showRemoteSortDialog,
     );
-  }
-
-  Future<void> _showAdaptiveRemoteSortDialog() async {
-    if (AppDisplaySurfaceScope.of(context) != AppDisplaySurface.phone) {
-      await _showLargeScreenRemoteSortDialog();
-      return;
-    }
-    final provider = _provider;
-    final currentSortSettings = _getCurrentRemoteSortSettings(provider);
-    final items = _buildRemoteSortItems(
-      currentSortSettings['sortBy']!,
-      currentSortSettings['sortOrder']!,
-    );
-
-    final selection =
-        await CupertinoBottomSheet.showSelection<_RemoteSortSelection>(
-      context: context,
-      title: '排序',
-      options: [
-        for (final item in items)
-          CupertinoBottomSheetOption(label: item.title, value: item.value),
-      ],
-    );
-    if (selection != null) _applyRemoteSortSelection(selection);
   }
 
   Map<String, String> _getCurrentRemoteSortSettings(dynamic provider) {
@@ -2005,44 +2051,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
     };
   }
 
-  List<DropdownMenuItemData<_RemoteSortSelection>> _buildRemoteSortItems(
-    String currentSortBy,
-    String currentSortOrder,
-  ) {
-    final options = getMediaSortOptions(_mediaLibraryType);
-    final items = <DropdownMenuItemData<_RemoteSortSelection>>[];
-
-    for (final option in options) {
-      for (final order in mediaLibrarySortOrders) {
-        final sortOrderValue = order['value'];
-        final sortOrderLabel = order['label'];
-        if (sortOrderValue == null || sortOrderLabel == null) {
-          continue;
-        }
-
-        final selection = _RemoteSortSelection(
-          sortBy: option.value,
-          sortOrder: sortOrderValue,
-          label: '${option.label} ($sortOrderLabel)',
-          description: option.description,
-        );
-
-        items.add(
-          DropdownMenuItemData<_RemoteSortSelection>(
-            title: selection.label,
-            value: selection,
-            isSelected: option.value == currentSortBy &&
-                sortOrderValue == currentSortOrder,
-            description: selection.description,
-          ),
-        );
-      }
-    }
-
-    return items;
-  }
-
-  void _applyRemoteSortSelection(_RemoteSortSelection selection) {
+  void _applyRemoteSortSelection(NetworkMediaSortChoice selection) {
     final provider = _provider;
     if (_isShowingLibraryContent && _selectedLibraryId != null) {
       provider.setLibrarySortSettings(
@@ -2065,29 +2074,4 @@ class _FolderNode {
     required this.id,
     required this.name,
   });
-}
-
-class _RemoteSortSelection {
-  final String sortBy;
-  final String sortOrder;
-  final String label;
-  final String? description;
-
-  const _RemoteSortSelection({
-    required this.sortBy,
-    required this.sortOrder,
-    required this.label,
-    this.description,
-  });
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is _RemoteSortSelection &&
-          runtimeType == other.runtimeType &&
-          sortBy == other.sortBy &&
-          sortOrder == other.sortOrder;
-
-  @override
-  int get hashCode => Object.hash(sortBy, sortOrder);
 }
