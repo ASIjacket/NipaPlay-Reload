@@ -10,13 +10,17 @@ import 'media_server_transport_client_stub.dart'
 
 /// Sends Emby/Jellyfin HTTP requests through one configurable transport.
 class MediaServerTransport {
+  static String? _httpProxyOverride;
   static String? _connectionUserAgentCache;
 
   static const String defaultConnectionUserAgent = defaultNipaPlayUserAgent;
 
   MediaServerTransport({
+    String httpProxy = '',
     String userAgent = defaultConnectionUserAgent,
-  })  : _client = platform.createMediaServerClient(),
+  })  : _client = platform.createMediaServerClient(
+          validateHttpProxy(httpProxy),
+        ),
         _userAgent = _resolveUserAgent(userAgent);
 
   /// Creates a transport that owns [client] and closes it on timeout or close.
@@ -25,6 +29,16 @@ class MediaServerTransport {
     String userAgent = defaultConnectionUserAgent,
   })  : _client = client,
         _userAgent = _resolveUserAgent(userAgent);
+
+  /// Updates the proxy used by transports created for subsequent requests.
+  static void setHttpProxyOverride(String value) {
+    _httpProxyOverride = value.trim();
+  }
+
+  /// Clears the runtime override so subsequent transports read preferences.
+  static void clearHttpProxyOverride() {
+    _httpProxyOverride = null;
+  }
 
   /// Persists the User-Agent shared by all Emby/Jellyfin request types.
   ///
@@ -62,11 +76,66 @@ class MediaServerTransport {
     }
   }
 
-  /// Creates a one-request transport from the current persisted UA setting.
+  /// Validates and parses an HTTP forward-proxy endpoint.
+  ///
+  /// Returns `null` when [value] is empty. Proxy authentication and URL
+  /// path/query/fragment components are intentionally unsupported.
+  static Uri? validateHttpProxy(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(trimmed);
+    int port;
+    try {
+      port = uri?.port ?? 0;
+    } on FormatException {
+      throw FormatException('Invalid HTTP proxy port.', value);
+    }
+    if (uri == null ||
+        uri.scheme.toLowerCase() != 'http' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        (uri.path.isNotEmpty && uri.path != '/') ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        port < 1 ||
+        port > 65535) {
+      throw FormatException(
+        'HTTP proxy must be an http:// host with an optional valid port.',
+        value,
+      );
+    }
+    return uri;
+  }
+
+  /// Creates a one-request transport from the current persisted settings.
   static Future<MediaServerTransport> fromStoredSettings() async {
+    if (!platform.supportsHttpForwardProxy) {
+      return MediaServerTransport();
+    }
     final storedUserAgent = await getStoredConnectionUserAgent();
     final userAgent = _resolveUserAgent(storedUserAgent);
-    return MediaServerTransport(userAgent: userAgent);
+    final override = _httpProxyOverride;
+    if (override != null) {
+      return MediaServerTransport(
+        httpProxy: override,
+        userAgent: userAgent,
+      );
+    }
+
+    String proxy;
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      proxy =
+          (preferences.getString(SettingsKeys.playerHttpProxy) ?? '').trim();
+    } catch (_) {
+      proxy = '';
+    }
+    return MediaServerTransport(
+      httpProxy: proxy,
+      userAgent: userAgent,
+    );
   }
 
   final http.Client _client;

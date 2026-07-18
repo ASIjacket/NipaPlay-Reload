@@ -76,7 +76,7 @@ void main() {
       compactMediaKit,
       contains(
         'applyMediaKitNetworkOptions( _setMpvPropertyOption, '
-        'userAgent: _userAgent, )',
+        'userAgent: _userAgent, httpProxy: _httpProxy, )',
       ),
     );
   });
