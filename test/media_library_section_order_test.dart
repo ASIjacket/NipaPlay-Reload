@@ -234,6 +234,67 @@ void main() {
     );
   });
 
+  testWidgets('desktop order dialog grows with section count and caps its size',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Future<Size> openDialogWith(int sectionCount) async {
+      final sections = List<UnifiedMediaLibrarySection>.generate(
+        sectionCount,
+        (index) => UnifiedMediaLibrarySection(
+          id: 'dynamic-$index',
+          label: '动态媒体库 $index',
+          phoneSymbol: 'rectangle.stack',
+          contentType: UnifiedMediaLibraryContentType.dandanplay,
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AppDisplaySurfaceScope(
+            surface: AppDisplaySurface.desktopTablet,
+            child: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  await showAdaptiveMediaLibrarySectionOrder(
+                    context,
+                    sections,
+                  );
+                },
+                child: const Text('打开排序'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开排序'));
+      await tester.pumpAndSettle();
+      final size = tester.getSize(
+        find.byKey(
+          const ValueKey<String>('media-library-order-dialog-content'),
+        ),
+      );
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+      return size;
+    }
+
+    final twoSections = await openDialogWith(2);
+    final sixSections = await openDialogWith(6);
+    final manySections = await openDialogWith(20);
+
+    for (final size in <Size>[twoSections, sixSections, manySections]) {
+      expect(size.width, greaterThanOrEqualTo(640));
+      expect(size.width, lessThanOrEqualTo(720));
+    }
+    expect(twoSections.height, greaterThanOrEqualTo(240));
+    expect(sixSections.height, greaterThan(twoSections.height));
+    expect(manySections.height, greaterThan(sixSections.height));
+    expect(manySections.height, lessThanOrEqualTo(576));
+  });
+
   testWidgets('phone media library can open and save dynamic section sorting',
       (tester) async {
     List<String>? savedOrder;

@@ -453,14 +453,30 @@ Future<List<String>?> showAdaptiveMediaLibrarySectionOrder(
 
   return material.showDialog<List<String>>(
     context: context,
-    builder: (dialogContext) => material.AlertDialog(
-      title: const material.Text('媒体库排序'),
-      content: material.SizedBox(
-        width: 420,
-        height: (sections.length * 58.0).clamp(174.0, 464.0),
-        child: _MediaLibrarySectionOrderEditor(sections: sections),
-      ),
-    ),
+    builder: (dialogContext) {
+      final viewport = material.MediaQuery.sizeOf(dialogContext);
+      final maximumWidth = (viewport.width - 96).clamp(0.0, 720.0);
+      final minimumWidth = maximumWidth.clamp(0.0, 640.0);
+      final dialogWidth = (viewport.width * 0.64).clamp(
+        minimumWidth,
+        maximumWidth,
+      );
+      final maximumHeight = (viewport.height * 0.72).clamp(0.0, 600.0);
+      final desiredHeight = 128.0 + sections.length * 58.0;
+      final dialogHeight = desiredHeight.clamp(0.0, maximumHeight);
+
+      return material.AlertDialog(
+        title: const material.Text('媒体库排序'),
+        content: material.SizedBox(
+          key: const material.ValueKey<String>(
+            'media-library-order-dialog-content',
+          ),
+          width: dialogWidth,
+          height: dialogHeight,
+          child: _MediaLibrarySectionOrderEditor(sections: sections),
+        ),
+      );
+    },
   );
 }
 
