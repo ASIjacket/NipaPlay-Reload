@@ -7,6 +7,7 @@ import 'package:path/path.dart' as path;
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
 
 class HistoryAllModal extends StatefulWidget {
   final List<WatchHistoryItem> history;
@@ -368,7 +369,7 @@ style: TextStyle(
     if (path != null) {
       final lowerPath = path.toLowerCase();
       if (lowerPath.startsWith('http://') || lowerPath.startsWith('https://')) {
-        return Image.network(
+        return MediaServerAwareNetworkImage(
           path,
           fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => _buildDefaultThumbnail(),

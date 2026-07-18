@@ -27,6 +27,10 @@ class SettingsKeys {
   /// 自定义播放器请求视频的 User-Agent（空字符串 = 用内核默认 UA）。
   static const String customPlayerUA = 'custom_player_ua';
 
+  /// Emby/Jellyfin API、图片和播放同步请求共用的 User-Agent。
+  static const String mediaServerConnectionUserAgent =
+      'media_server_connection_user_agent_v1';
+
   static const String autoCheckUpdatesInBackground =
       'auto_check_updates_in_background';
 

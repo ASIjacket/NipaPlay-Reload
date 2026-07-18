@@ -521,29 +521,7 @@ extension DashboardHomePageImageHelpers on _DashboardHomePageState {
 
   // 辅助方法：验证图片URL是否有效（HEAD校验，确保非404并且为图片）
   Future<bool> _validateImageUrl(String url) async {
-    try {
-      final response = await http
-          .head(WebRemoteAccessService.proxyUri(Uri.parse(url)))
-          .timeout(
-            const Duration(seconds: 2),
-            onTimeout: () =>
-                throw TimeoutException('图片验证超时', const Duration(seconds: 2)),
-          );
-
-      if (response.statusCode != 200) return false;
-      final contentType = response.headers['content-type'];
-      if (contentType == null || !contentType.startsWith('image/'))
-        return false;
-
-      final contentLength = response.headers['content-length'];
-      if (contentLength != null) {
-        final len = int.tryParse(contentLength);
-        if (len != null && len < 100) return false;
-      }
-      return true;
-    } catch (_) {
-      return false;
-    }
+    return validateMediaServerImageCandidate(Uri.parse(url));
   }
 
   // 辅助方法：获取Jellyfin项目简介

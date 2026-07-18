@@ -1,8 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:nipaplay/models/server_profile_model.dart';
 import 'package:nipaplay/services/media_server_service_base.dart';
+import 'package:nipaplay/services/media_server_transport.dart';
 
 class _TestMediaServerService extends MediaServerServiceBase {
+  _TestMediaServerService({this.requestClient, this.transportUserAgent});
+
+  final http.Client? requestClient;
+  final String? transportUserAgent;
+
   @override
   String get serviceName => 'Test';
 
@@ -76,8 +83,26 @@ class _TestMediaServerService extends MediaServerServiceBase {
   @override
   void clearServiceData() {}
 
+  @override
+  Future<MediaServerTransport> createMediaServerTransport() async {
+    return MediaServerTransport.fromClient(
+      requestClient ?? http.Client(),
+      userAgent: transportUserAgent ??
+          MediaServerTransport.defaultConnectionUserAgent,
+    );
+  }
+
   String resolveRelative(String baseUrl, String rawUrl) {
     return resolveServerRelativeUrl(baseUrl, rawUrl);
+  }
+
+  Future<http.Response> followRedirects(Uri uri) {
+    return sendRequestFollowingRedirects(
+      uri,
+      method: 'GET',
+      headers: const {},
+      timeout: const Duration(seconds: 1),
+    );
   }
 }
 
@@ -155,4 +180,42 @@ void main() {
       expect(allowed, isFalse);
     });
   });
+
+  test('same-origin redirect keeps the connection User-Agent', () async {
+    final client = _RedirectClient();
+    final service = _TestMediaServerService(
+      requestClient: client,
+      transportUserAgent: 'ApiClient/6.0',
+    );
+
+    final response = await service.followRedirects(
+      Uri.parse('https://host/emby/start'),
+    );
+
+    expect(response.statusCode, 200);
+    expect(client.requests, [
+      ('/emby/start', 'ApiClient/6.0'),
+      ('/emby/final', 'ApiClient/6.0'),
+    ]);
+  });
+}
+
+class _RedirectClient extends http.BaseClient {
+  final List<(String, String?)> requests = [];
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    requests.add((request.url.path, request.headers['User-Agent']));
+    if (requests.length == 1) {
+      return http.StreamedResponse(
+        const Stream<List<int>>.empty(),
+        302,
+        headers: const {'location': '/emby/final'},
+      );
+    }
+    return http.StreamedResponse(const Stream<List<int>>.empty(), 200);
+  }
+
+  @override
+  void close() {}
 }

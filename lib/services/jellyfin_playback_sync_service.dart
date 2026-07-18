@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'jellyfin_service.dart';
+import 'media_server_transport.dart';
 
 /// 简化的Jellyfin播放记录同步服务
 /// 实现最小化的播放记录同步功能
@@ -305,18 +306,19 @@ class JellyfinPlaybackSyncService {
       'X-Emby-Token': _jellyfinService.accessToken!,
     };
     
-    final uri = Uri.parse(url);
-    
-    // 添加超时处理，避免长时间等待
-    const timeout = Duration(seconds: 10);
-    
-    switch (method.toUpperCase()) {
-      case 'GET':
-        return await http.get(uri, headers: headers).timeout(timeout);
-      case 'POST':
-        return await http.post(uri, headers: headers, body: body).timeout(timeout);
-      default:
-        throw Exception('不支持的HTTP方法: $method');
+    final request = http.Request(method.toUpperCase(), Uri.parse(url))
+      ..headers.addAll(headers);
+    if (body != null) {
+      request.body = body;
+    }
+    final transport = await MediaServerTransport.fromStoredSettings();
+    try {
+      return await transport.send(
+        request,
+        timeout: const Duration(seconds: 10),
+      );
+    } finally {
+      transport.close();
     }
   }
   

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:nipaplay/models/media_server_playback.dart';
 import '../models/watch_history_model.dart';
 import 'emby_service.dart';
+import 'media_server_transport.dart';
 
 /// Emby播放记录同步服务
 /// 基于Jellyfin同步服务实现，适配Emby API接口差异
@@ -312,18 +313,19 @@ class EmbyPlaybackSyncService {
       'X-Emby-Token': _embyService.accessToken!,
     };
     
-    final uri = Uri.parse(url);
-    
-    // 添加超时处理，避免长时间等待
-    const timeout = Duration(seconds: 10);
-    
-    switch (method.toUpperCase()) {
-      case 'GET':
-        return await http.get(uri, headers: headers).timeout(timeout);
-      case 'POST':
-        return await http.post(uri, headers: headers, body: body).timeout(timeout);
-      default:
-        throw Exception('不支持的HTTP方法: $method');
+    final request = http.Request(method.toUpperCase(), Uri.parse(url))
+      ..headers.addAll(headers);
+    if (body != null) {
+      request.body = body;
+    }
+    final transport = await MediaServerTransport.fromStoredSettings();
+    try {
+      return await transport.send(
+        request,
+        timeout: const Duration(seconds: 10),
+      );
+    } finally {
+      transport.close();
     }
   }
   

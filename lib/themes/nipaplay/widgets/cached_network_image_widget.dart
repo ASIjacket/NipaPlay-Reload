@@ -1,9 +1,9 @@
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:nipaplay/services/media_server_image_loader.dart';
 import 'package:nipaplay/utils/image_cache_manager.dart';
 import 'loading_placeholder.dart';
-import 'package:http/http.dart' as http;
-import 'package:nipaplay/services/web_remote_access_service.dart';
 
 // 图片加载模式
 enum CachedImageLoadMode {
@@ -30,6 +30,7 @@ class CachedNetworkImageWidget extends StatefulWidget {
   final bool forceBlur; // 新增：强制模糊（不做分辨率判断）
   final double lowResBlurSigma; // 新增：低清模糊强度
   final double lowResMinScale; // 新增：低清判定阈值
+  final Future<Uint8List> Function(Uri uri)? imageBytesLoader;
 
   const CachedNetworkImageWidget({
     super.key,
@@ -49,6 +50,7 @@ class CachedNetworkImageWidget extends StatefulWidget {
     this.forceBlur = false,
     this.lowResBlurSigma = 40,
     this.lowResMinScale = 0.9,
+    this.imageBytesLoader,
   });
 
   @override
@@ -72,7 +74,9 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
   @override
   void didUpdateWidget(CachedNetworkImageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.imageUrl != widget.imageUrl) {
+    if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.imageBytesLoader != widget.imageBytesLoader) {
+      _currentUrl = null;
       // 不再在这里释放图片，改为由缓存管理器统一管理
       setState(() {
         _isImageLoaded = false;
@@ -93,6 +97,11 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
     if (_currentUrl == widget.imageUrl || _isDisposed) return;
     _currentUrl = widget.imageUrl;
     _hasRetriedLowRes = false;
+
+    if (widget.imageBytesLoader != null) {
+      _imageFuture = _loadOriginalImage(widget.imageUrl);
+      return;
+    }
     
     // 旧版：仅使用缓存管理器单通道加载
     if (widget.loadMode == CachedImageLoadMode.legacy) {
@@ -137,20 +146,15 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
     }
     
     try {
-      final response = await http.get(
-        WebRemoteAccessService.proxyUri(Uri.parse(widget.imageUrl)),
-      );
+      final imageBytes = await _loadImageBytes(Uri.parse(widget.imageUrl));
+      final codec = await ui.instantiateImageCodec(imageBytes);
+      final frame = await codec.getNextFrame();
       
-      if (response.statusCode == 200) {
-        final codec = await ui.instantiateImageCodec(response.bodyBytes);
-        final frame = await codec.getNextFrame();
-        
-        // 如果组件还在使用，更新基础图片
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _basicImage = frame.image;
-          });
-        }
+      // 如果组件还在使用，更新基础图片
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _basicImage = frame.image;
+        });
       }
     } catch (e) {
       debugPrint('加载基础图片失败: $e');
@@ -159,15 +163,14 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
 
   // 新增方法：直接加载原始图片，不进行压缩
   Future<ui.Image> _loadOriginalImage(String imageUrl) async {
-    final response = await http.get(
-      WebRemoteAccessService.proxyUri(Uri.parse(imageUrl)),
-    );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load image');
-    }
-    final codec = await ui.instantiateImageCodec(response.bodyBytes);
+    final imageBytes = await _loadImageBytes(Uri.parse(imageUrl));
+    final codec = await ui.instantiateImageCodec(imageBytes);
     final frame = await codec.getNextFrame();
     return frame.image;
+  }
+
+  Future<Uint8List> _loadImageBytes(Uri uri) {
+    return widget.imageBytesLoader?.call(uri) ?? loadNetworkImageBytes(uri);
   }
 
   // 安全获取图片，添加多重保护
@@ -311,12 +314,14 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted && !_isDisposed) {
                     setState(() {
-                      _imageFuture = ImageCacheManager.instance.loadImage(
-                        widget.imageUrl,
-                        targetWidth: widget.memCacheWidth,
-                        targetHeight: widget.memCacheHeight,
-                        forceRefresh: true,
-                      );
+                      _imageFuture = widget.imageBytesLoader != null
+                          ? _loadOriginalImage(widget.imageUrl)
+                          : ImageCacheManager.instance.loadImage(
+                              widget.imageUrl,
+                              targetWidth: widget.memCacheWidth,
+                              targetHeight: widget.memCacheHeight,
+                              forceRefresh: true,
+                            );
                     });
                   }
                 });
