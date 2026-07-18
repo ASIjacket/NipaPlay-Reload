@@ -33,7 +33,10 @@ void main() {
       httpProxy: 'http://127.0.0.1:8000',
     );
 
-    expect(applied, [('http-proxy', 'http://127.0.0.1:8000')]);
+    expect(applied, [
+      ('user-agent', ''),
+      ('http-proxy', 'http://127.0.0.1:8000'),
+    ]);
   });
 
   test('saving a proxy persists it and rebuilds the active kernel', () async {
