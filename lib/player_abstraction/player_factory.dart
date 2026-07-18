@@ -38,6 +38,7 @@ class PlayerFactory {
   static PlayerErikaAndroidOutputMode _cachedErikaAndroidOutputMode =
       PlayerErikaAndroidOutputMode.sdr;
   static String _cachedCustomPlayerUA = ''; // 自定义播放器 UA，空=用内核默认
+  static String _cachedHttpProxy = '';
   static String? _oneTimeUA; // 一次性 UA（仅下一次播放有效，不持久化，用后即清）
   static bool _hasLoadedSettings = false;
 
@@ -75,6 +76,7 @@ class PlayerFactory {
       final erikaAndroidOutputModeIndex =
           prefs.getInt(_erikaAndroidOutputModeKey);
       final customPlayerUA = await _loadCustomPlayerUA(prefs);
+      final httpProxy = prefs.getString(SettingsKeys.playerHttpProxy) ?? '';
 
       if (kernelTypeIndex != null &&
           kernelTypeIndex < PlayerKernelType.values.length) {
@@ -95,6 +97,7 @@ class PlayerFactory {
       _cachedErikaAndroidOutputMode =
           _decodeErikaAndroidOutputMode(erikaAndroidOutputModeIndex);
       _cachedCustomPlayerUA = customPlayerUA;
+      _cachedHttpProxy = httpProxy.trim();
 
       _hasLoadedSettings = true;
     } catch (e) {
@@ -105,6 +108,7 @@ class PlayerFactory {
       _cachedAndroidAudioOutput = 'opensles';
       _cachedErikaAndroidOutputMode = PlayerErikaAndroidOutputMode.sdr;
       _cachedCustomPlayerUA = '';
+      _cachedHttpProxy = '';
       MediaKitPlayerAdapter.setMacOSNativeVideoPreference(false);
       _hasLoadedSettings = true;
     }
@@ -120,6 +124,7 @@ class PlayerFactory {
       _cachedAndroidAudioOutput = 'opensles';
       _cachedErikaAndroidOutputMode = PlayerErikaAndroidOutputMode.sdr;
       _cachedCustomPlayerUA = '';
+      _cachedHttpProxy = '';
       MediaKitPlayerAdapter.setMacOSNativeVideoPreference(false);
       _hasLoadedSettings = true;
 
@@ -151,6 +156,8 @@ class PlayerFactory {
         _cachedErikaAndroidOutputMode =
             _decodeErikaAndroidOutputMode(erikaAndroidOutputModeIndex);
         _cachedCustomPlayerUA = await _loadCustomPlayerUA(prefs);
+        _cachedHttpProxy =
+            (prefs.getString(SettingsKeys.playerHttpProxy) ?? '').trim();
       }).catchError((Object error) {
         debugPrint('[PlayerFactory] 异步加载设置出错: $error');
       });
@@ -163,6 +170,7 @@ class PlayerFactory {
       _cachedAndroidAudioOutput = 'opensles';
       _cachedErikaAndroidOutputMode = PlayerErikaAndroidOutputMode.sdr;
       _cachedCustomPlayerUA = '';
+      _cachedHttpProxy = '';
     }
   }
 
@@ -334,6 +342,29 @@ class PlayerFactory {
     }
   }
 
+  /// HTTP forward proxy endpoint（可承载 HTTP/HTTPS 目标流量；留空禁用）。
+  static String getHttpProxy() {
+    if (!_hasLoadedSettings) {
+      _loadSettingsSync();
+    }
+    return _cachedHttpProxy;
+  }
+
+  static Future<void> saveHttpProxy(String proxy) async {
+    final resolved = proxy.trim();
+    final changed = resolved != _cachedHttpProxy;
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(SettingsKeys.playerHttpProxy, resolved);
+      _cachedHttpProxy = resolved;
+      debugPrint('[PlayerFactory] 保存播放器代理: '
+          '${resolved.isEmpty ? '(无)' : resolved}');
+      if (changed) _notifyNetworkOptionsChanged();
+    } catch (error) {
+      debugPrint('[PlayerFactory] 保存播放器代理出错: $error');
+    }
+  }
+
   static void _notifyNetworkOptionsChanged() {
     if (kIsWeb) return;
     _kernelChangeController.add(_cachedKernelType ?? PlayerKernelType.mdk);
@@ -350,12 +381,14 @@ class PlayerFactory {
     // 如果没有指定内核类型，从缓存或设置中读取
     kernelType ??= getKernelType();
     final customPlayerUA = getCustomPlayerUA();
+    final httpProxy = getHttpProxy();
 
     switch (kernelType) {
       case PlayerKernelType.mdk:
         debugPrint('[PlayerFactory] 创建 MDK 播放器');
         return MdkPlayerAdapter(
           userAgent: customPlayerUA,
+          httpProxy: httpProxy,
         );
       case PlayerKernelType.videoPlayer:
         debugPrint('[PlayerFactory] 创建 Video Player 播放器');
@@ -365,6 +398,7 @@ class PlayerFactory {
           bufferSize: getPrecacheBufferSizeBytes(),
           androidAudioOutput: getAndroidAudioOutput(),
           userAgent: customPlayerUA,
+          httpProxy: httpProxy,
         );
       case PlayerKernelType.erika:
         debugPrint('[PlayerFactory] 创建 Erika 播放器');
