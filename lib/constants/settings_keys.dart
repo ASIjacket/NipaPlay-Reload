@@ -34,6 +34,9 @@ class SettingsKeys {
   static const String mediaServerConnectionUserAgent =
       'media_server_connection_user_agent_v1';
 
+  /// HTTP forward proxy endpoint（可承载 HTTP/HTTPS 目标流量；留空禁用）。
+  static const String playerHttpProxy = 'player_http_proxy';
+
   static const String autoCheckUpdatesInBackground =
       'auto_check_updates_in_background';
 

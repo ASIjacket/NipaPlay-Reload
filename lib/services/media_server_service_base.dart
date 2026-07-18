@@ -16,6 +16,11 @@ import 'dart:io' if (dart.library.io) 'dart:io';
 abstract class MediaServerServiceBase {
   static const int _maxRedirects = 5;
 
+  /// 设置页保存代理后调用，立即刷新缓存（无需重启即可对下一次连接生效）。
+  static void setHttpProxyOverride(String value) {
+    MediaServerTransport.setHttpProxyOverride(value);
+  }
+
   final MultiAddressServerService _multiAddressService =
       MultiAddressServerService.instance;
 

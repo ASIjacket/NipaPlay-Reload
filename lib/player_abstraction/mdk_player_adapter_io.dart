@@ -14,12 +14,28 @@ const List<String> mdkUserAgentPropertyKeys = [
 ];
 
 @visibleForTesting
+const List<String> mdkHttpProxyPropertyKeys = [
+  'avformat.http_proxy',
+  'avio.http_proxy',
+];
+
+@visibleForTesting
 void applyMdkUserAgentProperties(
   void Function(String key, String value) setter,
   String userAgent,
 ) {
   for (final key in mdkUserAgentPropertyKeys) {
     setter(key, userAgent);
+  }
+}
+
+@visibleForTesting
+void applyMdkHttpProxyProperties(
+  void Function(String key, String value) setter,
+  String httpProxy,
+) {
+  for (final key in mdkHttpProxyPropertyKeys) {
+    setter(key, httpProxy);
   }
 }
 
@@ -195,11 +211,13 @@ class MdkPlayerAdapter implements AbstractPlayer {
   String? _activeAudioDecoder;
   int _internalAudioTrackCount = 0; // 内部音频轨道数，用于区分外挂MKA轨道
 
-  // 网络流自定义 User-Agent（留空表示不覆盖 FFmpeg 默认行为）。
+  // 网络流自定义 User-Agent / HTTP 代理（留空表示不覆盖 FFmpeg 默认行为）。
   final String _userAgent;
+  final String _httpProxy;
 
-  MdkPlayerAdapter({String? userAgent})
-      : _userAgent = (userAgent ?? '').trim() {
+  MdkPlayerAdapter({String? userAgent, String? httpProxy})
+      : _userAgent = (userAgent ?? '').trim(),
+        _httpProxy = (httpProxy ?? '').trim() {
     _mdkPlayer = mdk.Player();
     _attachMdkEventListeners();
     _applyInitialSettings();
@@ -252,13 +270,17 @@ class MdkPlayerAdapter implements AbstractPlayer {
     _configureSubtitleFonts();
   }
 
-  /// 将自定义 User-Agent 注入 FFmpeg（MDK 内核）。
+  /// 将自定义 User-Agent / HTTP 代理注入 FFmpeg（MDK 内核）。
   /// 这些选项通过 sticky 属性保存，切集重建播放器时会自动重新应用。
   /// 默认 UA 为 `Lavf/...`，部分 WAF/CDN 会因此拦截，可在播放器设置中覆盖。
   void _applyNetworkOptions() {
     if (_userAgent.isNotEmpty) {
       applyMdkUserAgentProperties(_setStickyProperty, _userAgent);
       debugPrint('MDK: 网络流 User-Agent = $_userAgent');
+    }
+    if (_httpProxy.isNotEmpty) {
+      applyMdkHttpProxyProperties(_setStickyProperty, _httpProxy);
+      debugPrint('MDK: 网络流 HTTP 代理 = $_httpProxy');
     }
   }
 

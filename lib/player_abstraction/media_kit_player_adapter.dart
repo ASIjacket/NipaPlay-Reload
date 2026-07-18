@@ -18,9 +18,13 @@ import './player_data_models.dart';
 void applyMediaKitNetworkOptions(
   void Function(String key, String value) setter, {
   required String userAgent,
+  String httpProxy = '',
 }) {
   if (userAgent.isNotEmpty) {
     setter('user-agent', userAgent);
+  }
+  if (httpProxy.isNotEmpty) {
+    setter('http-proxy', httpProxy);
   }
 }
 
@@ -30,8 +34,9 @@ class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
   static int? _cachedMacosMajor;
   static bool _macOSNativeVideoPreference = false;
   final String? _androidAudioOutput;
-  // 网络流自定义 User-Agent（留空表示不覆盖 libmpv 默认行为）。
+  // 网络流自定义 User-Agent / HTTP 代理（留空表示不覆盖 libmpv 默认行为）。
   final String _userAgent;
+  final String _httpProxy;
   static const int _defaultBufferSize = 32 * 1024 * 1024;
   static const String _hdrValidationFlag = 'NIPAPLAY_MACOS_HDR_VALIDATE';
   static const String _windowsHdrValidationFlag =
@@ -300,11 +305,13 @@ class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
     int? bufferSize,
     String? androidAudioOutput,
     String? userAgent,
+    String? httpProxy,
   })  : _mpvDiagnosticsEnabled = _shouldEnableMpvDiagnostics(),
         _enableHardwareAcceleration = !_shouldDisableHardwareAcceleration(),
         _prefersPlatformVideoSurface = _shouldUsePlatformNativeVideoSurface(),
         _androidAudioOutput = androidAudioOutput,
         _userAgent = (userAgent ?? '').trim(),
+        _httpProxy = (httpProxy ?? '').trim(),
         _player = Player(
           configuration: PlayerConfiguration(
             libass: true,
@@ -375,16 +382,20 @@ class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
     debugPrint('MediaKit: Android 音频后端设置为 $audioOutput');
   }
 
-  /// 将自定义 User-Agent 注入 libmpv（media_kit 内核）。
-  /// 通过 mpv 的 user-agent 选项设置，跨重定向后仍会携带。
+  /// 将自定义 User-Agent / HTTP 代理注入 libmpv（media_kit 内核）。
+  /// 通过 mpv 的 user-agent / http-proxy 选项设置，跨重定向后仍会携带。
   /// 默认 UA 为 `libmpv`，部分 WAF/CDN 会因此拦截，可在播放器设置中覆盖。
   void _applyNetworkOptions() {
     applyMediaKitNetworkOptions(
       _setMpvPropertyOption,
       userAgent: _userAgent,
+      httpProxy: _httpProxy,
     );
     if (_userAgent.isNotEmpty) {
       debugPrint('MediaKit: 网络流 User-Agent = $_userAgent');
+    }
+    if (_httpProxy.isNotEmpty) {
+      debugPrint('MediaKit: 网络流 HTTP 代理 = $_httpProxy');
     }
   }
 
