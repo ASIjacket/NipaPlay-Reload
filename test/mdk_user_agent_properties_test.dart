@@ -19,4 +19,20 @@ void main() {
     );
   });
 
+  test('empty User-Agent clears both FFmpeg HTTP option layers', () {
+    final applied = <(String, String)>[];
+
+    applyMdkUserAgentProperties(
+      (key, value) => applied.add((key, value)),
+      '',
+    );
+
+    expect(
+      applied,
+      [
+        ('avformat.user_agent', ''),
+        ('avio.user_agent', ''),
+      ],
+    );
+  });
 }

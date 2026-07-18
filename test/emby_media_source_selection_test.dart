@@ -171,6 +171,28 @@ void main() {
     });
   });
 
+  test('source-change cleanup clears both preferences exactly once', () async {
+    final clearedAudioItems = <String>[];
+    final clearedSubtitleItems = <String>[];
+
+    await clearEmbySelectionsForSourceChange(
+      itemId: 'episode-1',
+      clearAudio: clearedAudioItems.add,
+      clearSubtitle: clearedSubtitleItems.add,
+    );
+
+    expect(clearedAudioItems, <String>['episode-1']);
+    expect(clearedSubtitleItems, <String>['episode-1']);
+  });
+
+  test('nested Emby playback paths resolve to the episode item id', () {
+    expect(
+      embyItemIdFromVideoPath('emby://series/season/episode-1'),
+      'episode-1',
+    );
+    expect(embyItemIdFromVideoPath('emby://episode-2'), 'episode-2');
+  });
+
   testWidgets('selector shows every source and returns the tapped source',
       (tester) async {
     final first = _source('source-a', '/media/Version A.mkv');
@@ -280,5 +302,55 @@ void main() {
     );
     expect(embyService, contains('{String? mediaSourceId}'));
     expect(embyService, contains("source['Id']?.toString() == mediaSourceId"));
+    expect(detailPage, contains('clearEmbySelectionsForSourceChange('));
+    final sourceChanged = detailPage.substring(
+      detailPage.indexOf('onSourceChanged: (previousId, selectedId) async'),
+      detailPage.indexOf(
+          'startPlayback:', detailPage.indexOf('onSourceChanged:')),
+    );
+    expect(sourceChanged, contains('if (!mounted) return;'));
+    expect(
+      sourceChanged.indexOf('if (!mounted) return;'),
+      lessThan(sourceChanged.indexOf('Provider.of<VideoPlayerState>')),
+    );
+    final compactStreaming = streaming.replaceAll(RegExp(r'\s+'), ' ');
+    expect(
+      compactStreaming,
+      contains('final itemId = embyItemIdFromVideoPath(videoPath);'),
+    );
+    expect(
+      compactStreaming,
+      contains('final mediaSourceId = _currentPlaybackSession?.mediaSourceId;'),
+    );
+    final embySubtitleLoader = streaming.substring(
+      streaming.indexOf('Future<void> _loadEmbyExternalSubtitles'),
+      streaming.indexOf('Future<void> _loadStreamingExternalSubtitles'),
+    );
+    expect(
+      RegExp(r'_currentPlaybackSession\?\.mediaSourceId')
+          .allMatches(embySubtitleLoader),
+      hasLength(1),
+    );
+    expect(
+      compactStreaming,
+      contains(
+        'getSubtitleTracks(itemId, '
+        'mediaSourceId: mediaSourceId)',
+      ),
+    );
+    expect(
+      compactStreaming,
+      contains(
+        'downloadSubtitleFile(itemId, subtitleIndex, subtitleCodec, '
+        'mediaSourceId: mediaSourceId)',
+      ),
+    );
+    expect(
+      embyService,
+      contains(
+        'String itemId, int subtitleIndex, String format,'
+        '\n      {String? mediaSourceId}',
+      ),
+    );
   });
 }

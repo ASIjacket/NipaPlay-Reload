@@ -220,6 +220,11 @@ class PlayerFactory {
   /// 获取一次性 UA（不消费，供 UI 预填）。未设置返回 null。
   static String? getOneTimeUA() => _oneTimeUA;
 
+  static void applyUserAgentForNextOpen(void Function(String) setUserAgent) {
+    final userAgent = consumeOneTimeUA() ?? getCustomPlayerUA();
+    setUserAgent(userAgent);
+  }
+
   static int _clampPrecacheBufferSizeMb(int value) {
     return value
         .clamp(minPrecacheBufferSizeMb, maxPrecacheBufferSizeMb)

@@ -43,6 +43,24 @@ class MediaLibrarySectionOrderStore {
     return persistence;
   }
 
+  Future<void> updateVisible(List<String> visibleSectionIds) {
+    final visible = _normalize(visibleSectionIds);
+    final visibleSet = visible.toSet();
+    final orderedVisible = visible.iterator;
+    final merged = <String>[];
+    for (final id in _sectionIds) {
+      if (!visibleSet.contains(id)) {
+        merged.add(id);
+      } else if (orderedVisible.moveNext()) {
+        merged.add(orderedVisible.current);
+      }
+    }
+    while (orderedVisible.moveNext()) {
+      merged.add(orderedVisible.current);
+    }
+    return update(merged);
+  }
+
   static List<String> _normalize(Iterable<String> sectionIds) {
     final normalized = <String>{};
     for (final id in sectionIds) {

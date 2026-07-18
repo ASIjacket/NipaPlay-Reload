@@ -564,9 +564,8 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   void setUserAgent(String ua) {
-    if (ua.isEmpty) return;
     applyMdkUserAgentProperties(setProperty, ua);
-    debugPrint('MDK: 已设置自定义 user-agent: $ua');
+    debugPrint('MDK: 已设置 user-agent: ${ua.isEmpty ? "(默认)" : ua}');
   }
 
   @override

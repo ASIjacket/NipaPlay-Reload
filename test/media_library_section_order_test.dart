@@ -179,6 +179,38 @@ void main() {
     expect(persistedOrder, store.sectionIds);
   });
 
+  test('reordering visible sections preserves unavailable section positions',
+      () async {
+    List<String>? persistedOrder;
+    final store = MediaLibrarySectionOrderStore(
+      load: () async => <String>[
+        MediaLibrarySectionIds.local,
+        MediaLibrarySectionIds.emby,
+        MediaLibrarySectionIds.localManagement,
+        _dynamicSection.id,
+      ],
+      save: (ids) async => persistedOrder = List<String>.of(ids),
+    );
+    await store.restore();
+
+    await store.updateVisible(<String>[
+      MediaLibrarySectionIds.localManagement,
+      MediaLibrarySectionIds.local,
+      _dynamicSection.id,
+    ]);
+
+    expect(
+      store.sectionIds,
+      <String>[
+        MediaLibrarySectionIds.localManagement,
+        MediaLibrarySectionIds.emby,
+        MediaLibrarySectionIds.local,
+        _dynamicSection.id,
+      ],
+    );
+    expect(persistedOrder, store.sectionIds);
+  });
+
   test('a failed save does not block the next section order update', () async {
     var saveCount = 0;
     List<String>? persistedOrder;
@@ -220,6 +252,7 @@ void main() {
     final store = MediaLibrarySectionOrderStore(
       load: () async => <String>[
         MediaLibrarySectionIds.localManagement,
+        MediaLibrarySectionIds.emby,
         MediaLibrarySectionIds.local,
       ],
       save: (ids) async => savedOrders.add(List<String>.of(ids)),
@@ -262,9 +295,10 @@ void main() {
 
     expect(savedOrders, isNotEmpty);
     expect(
-      savedOrders.last.take(2),
+      savedOrders.last,
       <String>[
         MediaLibrarySectionIds.localManagement,
+        MediaLibrarySectionIds.emby,
         MediaLibrarySectionIds.local,
       ],
     );

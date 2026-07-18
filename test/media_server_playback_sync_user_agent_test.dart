@@ -97,7 +97,8 @@ void main() {
     expect(embyRequests, hasLength(2));
     expect(jellyfinRequests, hasLength(2));
     expect(
-      [...embyRequests, ...jellyfinRequests].map((request) => request.userAgent),
+      [...embyRequests, ...jellyfinRequests]
+          .map((request) => request.userAgent),
       everyElement('SyncClient/4.0'),
     );
     expect(embyRequests.first.method, 'GET');
@@ -178,6 +179,68 @@ void main() {
     expect(jellyfinUserAgents, hasLength(2));
     expect(embyUserAgents, everyElement('SubtitleClient/2.0'));
     expect(jellyfinUserAgents, everyElement('SubtitleClient/2.0'));
+  });
+
+  test('Emby subtitle download uses the selected media source', () async {
+    final previousPathProvider = PathProviderPlatform.instance;
+    final temporaryDirectory = await Directory.systemTemp.createTemp(
+      'nipaplay-selected-subtitle-source-test-',
+    );
+    PathProviderPlatform.instance = _TemporaryPathProvider(
+      temporaryDirectory.path,
+    );
+    addTearDown(() async {
+      PathProviderPlatform.instance = previousPathProvider;
+      await temporaryDirectory.delete(recursive: true);
+    });
+    final requestedPaths = <String>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      requestedPaths.add(request.uri.path);
+      if (request.uri.path.endsWith('/PlaybackInfo')) {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({
+            'MediaSources': [
+              {'Id': 'source-a'},
+              {'Id': 'source-b'},
+            ],
+          }));
+      } else {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write('1\n00:00:00,000 --> 00:00:01,000\nSubtitle');
+      }
+      await request.response.close();
+    });
+    final emby = EmbyService.instance
+      ..serverUrl = 'http://${server.address.address}:${server.port}'
+      ..accessToken = 'emby-token'
+      ..userId = 'emby-user'
+      ..currentProfile = null
+      ..isConnected = true;
+    addTearDown(() {
+      emby
+        ..isConnected = false
+        ..serverUrl = null
+        ..accessToken = null
+        ..userId = null;
+    });
+
+    final file = await emby.downloadSubtitleFile(
+      'episode-1',
+      4,
+      'srt',
+      mediaSourceId: 'source-b',
+    );
+
+    expect(file, isNotNull);
+    expect(
+      requestedPaths,
+      contains('/emby/Videos/episode-1/source-b/Subtitles/4/Stream.srt'),
+    );
   });
 }
 

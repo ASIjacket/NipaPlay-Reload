@@ -20,9 +20,7 @@ void applyMediaKitNetworkOptions(
   required String userAgent,
   String httpProxy = '',
 }) {
-  if (userAgent.isNotEmpty) {
-    setter('user-agent', userAgent);
-  }
+  setter('user-agent', userAgent);
   if (httpProxy.isNotEmpty) {
     setter('http-proxy', httpProxy);
   }
@@ -2473,12 +2471,11 @@ class MediaKitPlayerAdapter implements AbstractPlayer, TickerProvider {
 
   @override
   void setUserAgent(String ua) {
-    if (ua.isEmpty) return;
     try {
       // mpv 的 user-agent 属性，对所有 HTTP 请求生效。须在打开媒体前设置。
       unawaited((_player.platform as dynamic).setProperty('user-agent', ua));
       _properties['user-agent'] = ua;
-      debugPrint('MediaKit: 已设置自定义 user-agent: $ua');
+      debugPrint('MediaKit: 已设置 user-agent: ${ua.isEmpty ? "(默认)" : ua}');
     } catch (e) {
       debugPrint('MediaKit: 设置 user-agent 失败: $e');
     }

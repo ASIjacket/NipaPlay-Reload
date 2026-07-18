@@ -18,12 +18,12 @@ void main() {
     );
   });
 
-  test('MediaKit preserves its default User-Agent when no override is set', () {
+  test('MediaKit clears a previous User-Agent when no override is set', () {
     final cases = <({
       String userAgent,
       List<(String, String)> expected,
     })>[
-      (userAgent: '', expected: []),
+      (userAgent: '', expected: [('user-agent', '')]),
       (
         userAgent: 'PlayerClient/5.0',
         expected: [('user-agent', 'PlayerClient/5.0')],
@@ -73,11 +73,19 @@ void main() {
       contains('applyMdkUserAgentProperties(_setStickyProperty, _userAgent)'),
     );
     expect(
+      compactMdk,
+      isNot(contains('void setUserAgent(String ua) { if (ua.isEmpty) return;')),
+    );
+    expect(
       compactMediaKit,
       contains(
         'applyMediaKitNetworkOptions( _setMpvPropertyOption, '
         'userAgent: _userAgent, httpProxy: _httpProxy, )',
       ),
+    );
+    expect(
+      compactMediaKit,
+      isNot(contains('void setUserAgent(String ua) { if (ua.isEmpty) return;')),
     );
   });
 }

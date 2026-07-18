@@ -182,7 +182,7 @@ class _AdaptiveMediaLibraryPageState extends State<AdaptiveMediaLibraryPage> {
 
   Future<void> _persistSectionOrder(List<String> sectionIds) async {
     try {
-      await _sectionOrderStore.update(sectionIds);
+      await _sectionOrderStore.updateVisible(sectionIds);
     } catch (error) {
       debugPrint('保存媒体库排序失败: $error');
     }
