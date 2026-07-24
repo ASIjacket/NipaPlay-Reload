@@ -7,6 +7,47 @@ import './player_data_models.dart';
 import 'dart:async';
 import 'package:nipaplay/utils/subtitle_font_loader.dart';
 
+@visibleForTesting
+bool applyMdkUserAgentProperties(
+  void Function(String key, String value) setter,
+  String userAgent, {
+  void Function(String key)? clear,
+  Map<String, String> defaults = const {},
+}) {
+  var restoredDefaults = true;
+  for (final key in const ['avformat.user_agent', 'avio.user_agent']) {
+    if (userAgent.isEmpty) {
+      clear?.call(key);
+      final defaultValue = defaults[key];
+      if (defaultValue != null) {
+        setter(key, defaultValue);
+      } else {
+        restoredDefaults = false;
+      }
+    } else {
+      setter(key, userAgent);
+    }
+  }
+  return userAgent.isNotEmpty || restoredDefaults;
+}
+
+@visibleForTesting
+void applyMdkUserAgentWithFallback(
+  void Function(String key, String value) setter,
+  String userAgent, {
+  required void Function(String key) clear,
+  Map<String, String> defaults = const {},
+  required VoidCallback recreateWithDefaults,
+}) {
+  final restored = applyMdkUserAgentProperties(
+    setter,
+    userAgent,
+    clear: clear,
+    defaults: defaults,
+  );
+  if (!restored) recreateWithDefaults();
+}
+
 // Enum Converters
 PlayerPlaybackState _toPlayerPlaybackState(mdk.PlaybackState state) {
   if (state == mdk.PlaybackState.stopped) return PlayerPlaybackState.stopped;
@@ -56,7 +97,8 @@ mdk.MediaType _fromPlayerMediaType(PlayerMediaType type) {
   }
 }
 
-PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo, {int internalAudioTrackCount = 0}) {
+PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo,
+    {int internalAudioTrackCount = 0}) {
   return PlayerMediaInfo(
     duration: mdkInfo.duration,
     video: mdkInfo.video?.map((v) {
@@ -161,7 +203,8 @@ PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo, {int internalAudioTrac
         language: language ?? 'unknown',
         metadata: metadata,
         rawRepresentation: rawRepresentation,
-        isExternal: internalAudioTrackCount > 0 && trackIndex >= internalAudioTrackCount,
+        isExternal: internalAudioTrackCount > 0 &&
+            trackIndex >= internalAudioTrackCount,
       );
     }).toList(),
   );
@@ -173,12 +216,14 @@ class MdkPlayerAdapter implements AbstractPlayer {
   List<String> _videoDecoders = const [];
   List<String> _audioDecoders = const [];
   final Map<String, String> _stickyProperties = {};
+  final Map<String, String> _defaultUserAgentProperties = {};
   String? _activeVideoDecoder;
   String? _activeAudioDecoder;
   int _internalAudioTrackCount = 0; // 内部音频轨道数，用于区分外挂MKA轨道
 
   MdkPlayerAdapter() {
     _mdkPlayer = mdk.Player();
+    _captureDefaultUserAgentProperties();
     _attachMdkEventListeners();
     _applyInitialSettings();
   }
@@ -198,6 +243,26 @@ class MdkPlayerAdapter implements AbstractPlayer {
     } catch (e) {
       debugPrint('MDK: 注册事件监听失败: $e');
     }
+  }
+
+  void _captureDefaultUserAgentProperties() {
+    for (final key in const ['avformat.user_agent', 'avio.user_agent']) {
+      final value = _mdkPlayer.getProperty(key);
+      if (value != null && value.isNotEmpty) {
+        _defaultUserAgentProperties.putIfAbsent(key, () => value);
+      }
+    }
+  }
+
+  void _recreateWithDefaultUserAgent() {
+    try {
+      _mdkPlayer.dispose();
+    } catch (_) {}
+    _mdkPlayer = mdk.Player();
+    _captureDefaultUserAgentProperties();
+    _attachMdkEventListeners();
+    _applyInitialSettings();
+    _reapplyStickyProperties();
   }
 
   void _setStickyProperty(String key, String value) {
@@ -325,6 +390,7 @@ class MdkPlayerAdapter implements AbstractPlayer {
       } catch (e) {}
 
       _mdkPlayer = mdk.Player();
+      _captureDefaultUserAgentProperties();
       _attachMdkEventListeners();
       _applyInitialSettings();
 
@@ -346,7 +412,8 @@ class MdkPlayerAdapter implements AbstractPlayer {
   }
 
   @override
-  PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo, internalAudioTrackCount: _internalAudioTrackCount);
+  PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo,
+      internalAudioTrackCount: _internalAudioTrackCount);
 
   @override
   List<int> get activeSubtitleTracks => _mdkPlayer.activeSubtitleTracks;
@@ -508,11 +575,14 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   void setUserAgent(String ua) {
-    if (ua.isEmpty) return;
-    // mdk-sdk: avio.user_agent 是 AVIOContext/URLProtocol 选项，对 HTTP 请求生效。
-    // setProperty 内部用 sticky property，对后续所有媒体生效。
-    setProperty('avio.user_agent', ua);
-    debugPrint('MDK: 已设置自定义 user-agent: $ua');
+    applyMdkUserAgentWithFallback(
+      setProperty,
+      ua,
+      clear: _stickyProperties.remove,
+      defaults: _defaultUserAgentProperties,
+      recreateWithDefaults: _recreateWithDefaultUserAgent,
+    );
+    debugPrint('MDK: 已设置 user-agent: ${ua.isEmpty ? "(默认)" : ua}');
   }
 
   @override
