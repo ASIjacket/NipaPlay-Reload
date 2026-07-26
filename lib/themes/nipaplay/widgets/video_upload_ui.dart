@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/cupertino.dart' as cupertino;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,17 +8,28 @@ import 'package:nipaplay/utils/video_player_state.dart';
 import 'dart:io' as io;
 import 'package:image_picker/image_picker.dart';
 import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/playback/adaptive_playback_entry_view.dart';
+import 'package:nipaplay/playback/unified_playback_entry_model.dart';
+import 'package:nipaplay/media_library/adaptive_media_library_primitives.dart';
+import 'package:nipaplay/player_abstraction/player_factory.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
-import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
-import 'package:nipaplay/utils/globals.dart' as globals;
+import 'package:nipaplay/themes/nipaplay/widgets/text_input_dialog.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:nipaplay/services/file_picker_service.dart';
 import 'package:nipaplay/services/external_player_service.dart';
-import 'package:nipaplay/utils/app_accent_color.dart';
 
 class VideoUploadUI extends StatefulWidget {
-  const VideoUploadUI({super.key});
+  const VideoUploadUI({
+    super.key,
+    this.detachedPlayer = false,
+    this.onLocateDetachedPlayer,
+    this.onReturnDetachedPlayer,
+  });
+
+  final bool detachedPlayer;
+  final VoidCallback? onLocateDetachedPlayer;
+  final VoidCallback? onReturnDetachedPlayer;
 
   @override
   State<VideoUploadUI> createState() => _VideoUploadUIState();
@@ -25,14 +37,11 @@ class VideoUploadUI extends StatefulWidget {
 
 class _VideoUploadUIState extends State<VideoUploadUI>
     with SingleTickerProviderStateMixin {
-  bool _isHovered = false;
-  bool _isUrlActionHovered = false;
-  bool _showUrlInput = false;
-  bool _isSubmittingUrl = false;
   late final AnimationController _mascotController;
   late final Animation<double> _mascotScale;
   final TextEditingController _urlController = TextEditingController();
   final FocusNode _urlFocusNode = FocusNode();
+  final ValueNotifier<bool> _isSubmittingUrl = ValueNotifier<bool>(false);
 
   @override
   void initState() {
@@ -71,379 +80,37 @@ class _VideoUploadUIState extends State<VideoUploadUI>
     _mascotController.dispose();
     _urlController.dispose();
     _urlFocusNode.dispose();
+    _isSubmittingUrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // 使用 Material 版本（新的设计）
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDarkMode ? Colors.white : Colors.black;
-    final mascotSize = globals.isPhone ? 80.0 : 120.0;
-
-    return Center(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => _mascotController.forward(from: 0.0),
-              child: ScaleTransition(
-                scale: _mascotScale,
-                child: Image.asset(
-                  'assets/girl.png',
-                  width: mascotSize,
-                  height: mascotSize,
-                  fit: BoxFit.contain,
-                ),
-              ),
-            ),
-          ),
-          SizedBox(width: 16),
-          Flexible(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 620),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '诶？还没有在播放的视频！',
-                    locale: const Locale("zh-Hans", "zh"),
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 18,
-                      fontWeight: FontWeight.normal,
-                    ),
-                  ),
-                  SizedBox(height: 18),
-                  MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    onEnter: (_) => setState(() => _isHovered = true),
-                    onExit: (_) => setState(() => _isHovered = false),
-                    child: GestureDetector(
-                      onTap: _handleUploadVideo,
-                      child: AnimatedScale(
-                        duration: const Duration(milliseconds: 200),
-                        scale: _isHovered ? 1.06 : 1.0,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '选择文件',
-                          locale: const Locale("zh-Hans", "zh"),
-                          style: TextStyle(
-                            color: _isHovered
-                                ? AppAccentColors.current
-                                : textColor,
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '从本地文件、相册或文件管理器中打开视频',
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.68),
-                      fontSize: 14,
-                    ),
-                  ),
-                  SizedBox(height: 18),
-                  _buildChoiceDivider(textColor),
-                  SizedBox(height: 18),
-                  MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    onEnter: (_) => setState(() => _isUrlActionHovered = true),
-                    onExit: (_) => setState(() => _isUrlActionHovered = false),
-                    child: GestureDetector(
-                      onTap: _toggleUrlInput,
-                      child: AnimatedScale(
-                        duration: const Duration(milliseconds: 200),
-                        scale: _isUrlActionHovered ? 1.04 : 1.0,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '输入链接',
-                          locale: const Locale("zh-Hans", "zh"),
-                          style: TextStyle(
-                            color: _isUrlActionHovered
-                                ? AppAccentColors.current
-                                : textColor.withOpacity(0.9),
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '粘贴 http/https 串流直链后直接播放',
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.68),
-                      fontSize: 14,
-                    ),
-                  ),
-                  if (_showUrlInput) ...[
-                    SizedBox(height: 14),
-                    _buildUrlInputCard(context, textColor),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    return AdaptivePlaybackEntryView(
+      content: unifiedPlaybackEntryContent,
+      mascotScale: _mascotScale,
+      onMascotTap: () => _mascotController.forward(from: 0),
+      onSelectFile: _handleUploadVideo,
+      onOpenUrlInput: () => unawaited(_showUrlInputDialog()),
+      detachedPlayer: widget.detachedPlayer,
+      onLocateDetachedPlayer: widget.onLocateDetachedPlayer,
+      onReturnDetachedPlayer: widget.onReturnDetachedPlayer,
     );
-  }
-
-  Widget _buildChoiceDivider(Color textColor) {
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 1,
-            color: textColor.withOpacity(0.14),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: Text(
-            '或',
-            style: TextStyle(
-              color: textColor.withOpacity(0.56),
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Container(
-            height: 1,
-            color: textColor.withOpacity(0.14),
-          ),
-        ),
-      ],
-    );
-  }
-
-  void _toggleUrlInput() {
-    if (globals.isTabletLikeMobile) {
-      unawaited(_showUrlInputDialog());
-      return;
-    }
-
-    setState(() {
-      _showUrlInput = !_showUrlInput;
-    });
-
-    if (_showUrlInput) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _urlFocusNode.requestFocus();
-      });
-    }
   }
 
   Future<void> _showUrlInputDialog() async {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isDarkMode = theme.brightness == Brightness.dark;
-    final textColor = isDarkMode ? Colors.white : Colors.black;
-    var requestedFocus = false;
-
-    await showDialog<void>(
+    await BlurDialog.show<void>(
       context: context,
-      builder: (dialogContext) {
-        if (!requestedFocus) {
-          requestedFocus = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            _urlFocusNode.requestFocus();
-          });
-        }
-
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding:
-              const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color:
-                    colorScheme.surface.withOpacity(isDarkMode ? 0.94 : 0.98),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: textColor.withOpacity(0.12)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    '输入链接',
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '支持 http/https 串流直链，建议使用 Media Kit 或 MDK 内核。',
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.72),
-                      fontSize: 13,
-                      height: 1.4,
-                    ),
-                  ),
-                  SizedBox(height: 10),
-                  TextField(
-                    controller: _urlController,
-                    focusNode: _urlFocusNode,
-                    keyboardType: TextInputType.url,
-                    textInputAction: TextInputAction.go,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    onSubmitted: (_) =>
-                        _handlePlayFromUrlFromDialog(dialogContext),
-                    decoration: InputDecoration(
-                      hintText: 'https://example.com/video.mp4 或签名下载直链',
-                      filled: true,
-                      fillColor: colorScheme.surface.withOpacity(
-                        isDarkMode ? 0.58 : 0.94,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 14,
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.of(dialogContext).pop(),
-                        child: Text('取消', style: TextStyle(color: textColor)),
-                      ),
-                      TextButton(
-                        onPressed:
-                            _isSubmittingUrl ? null : _pasteUrlFromClipboard,
-                        child: Text('粘贴', style: TextStyle(color: textColor)),
-                      ),
-                      TextButton(
-                        onPressed: _isSubmittingUrl
-                            ? null
-                            : () => _handlePlayFromUrlFromDialog(dialogContext),
-                        child: Text(
-                          _isSubmittingUrl ? '处理中...' : '播放链接',
-                          style: TextStyle(
-                            color: AppAccentColors.current,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _handlePlayFromUrlFromDialog(BuildContext dialogContext) async {
-    final success = await _handlePlayFromUrl();
-    if (!success || !mounted) return;
-    if (!dialogContext.mounted) return;
-    Navigator.of(dialogContext).pop();
-  }
-
-  Widget _buildUrlInputCard(BuildContext context, Color textColor) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isDarkMode = theme.brightness == Brightness.dark;
-
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 560),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colorScheme.surface.withOpacity(isDarkMode ? 0.36 : 0.72),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: textColor.withOpacity(0.12)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            '支持 http/https 串流直链，建议使用 Media Kit 或 MDK 内核。',
-            style: TextStyle(
-              color: textColor.withOpacity(0.72),
-              fontSize: 13,
-              height: 1.4,
-            ),
-          ),
-          SizedBox(height: 10),
-          TextField(
-            controller: _urlController,
-            focusNode: _urlFocusNode,
-            keyboardType: TextInputType.url,
-            textInputAction: TextInputAction.go,
-            autocorrect: false,
-            enableSuggestions: false,
-            onSubmitted: (_) => _handlePlayFromUrl(),
-            decoration: InputDecoration(
-              hintText: 'https://example.com/video.mp4 或签名下载直链',
-              filled: true,
-              fillColor: colorScheme.surface.withOpacity(
-                isDarkMode ? 0.58 : 0.94,
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 14,
-              ),
-            ),
-          ),
-          SizedBox(height: 10),
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              HoverScaleTextButton(
-                onPressed: _isSubmittingUrl ? null : _pasteUrlFromClipboard,
-                child: Text('粘贴', style: TextStyle(color: textColor)),
-              ),
-              HoverScaleTextButton(
-                onPressed: _isSubmittingUrl ? null : _handlePlayFromUrl,
-                child: Text(
-                  _isSubmittingUrl ? '处理中...' : '播放链接',
-                  style: TextStyle(
-                    color: AppAccentColors.current,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
+      title: unifiedPlaybackEntryContent.enterUrlLabel,
+      hidePhoneBottomBar: false,
+      contentWidget: AdaptivePlaybackUrlDialogContent(
+        content: unifiedPlaybackEntryContent,
+        controller: _urlController,
+        focusNode: _urlFocusNode,
+        isSubmitting: _isSubmittingUrl,
+        onPaste: _pasteUrlFromClipboard,
+        onEditOneTimeUserAgent: _showOneTimeUADialog,
+        onPlay: _handlePlayFromUrl,
       ),
     );
   }
@@ -467,8 +134,27 @@ class _VideoUploadUIState extends State<VideoUploadUI>
     }
   }
 
+  /// 串流播放的"自定义UA(仅一次)"：设置仅对下一次播放这条链接生效的一次性 UA。
+  Future<void> _showOneTimeUADialog() async {
+    final result = await TextInputDialog.show(
+      context,
+      title: '自定义 User-Agent（仅本次播放）',
+      subtitle: '仅对下一次播放生效，不影响长期设置。',
+      hintText: 'Mozilla/5.0 ...',
+      initialValue: PlayerFactory.getOneTimeUA() ?? '',
+      minLines: 2,
+    );
+    if (result == null) return; // 用户取消
+    PlayerFactory.setOneTimeUA(result);
+    if (!mounted) return;
+    BlurSnackBar.show(
+      context,
+      result.isEmpty ? '已清除一次性 UA，本次将使用长期/默认 UA' : '已设置一次性 UA，本次播放生效',
+    );
+  }
+
   Future<bool> _handlePlayFromUrl() async {
-    if (_isSubmittingUrl) return false;
+    if (_isSubmittingUrl.value) return false;
 
     final rawInput = _urlController.text.trim();
     final uri = Uri.tryParse(rawInput);
@@ -483,9 +169,7 @@ class _VideoUploadUIState extends State<VideoUploadUI>
       return false;
     }
 
-    setState(() {
-      _isSubmittingUrl = true;
-    });
+    _isSubmittingUrl.value = true;
 
     final videoState = context.read<VideoPlayerState>();
     videoState.setPreInitLoadingState('正在准备串流链接...');
@@ -510,9 +194,7 @@ class _VideoUploadUIState extends State<VideoUploadUI>
       return false;
     } finally {
       if (mounted) {
-        setState(() {
-          _isSubmittingUrl = false;
-        });
+        _isSubmittingUrl.value = false;
       }
     }
   }
@@ -527,6 +209,10 @@ class _VideoUploadUIState extends State<VideoUploadUI>
         final filePickerService = FilePickerService();
         final fileName = await filePickerService.pickVideoFile();
         if (fileName == null) {
+          videoState.resetPlayer();
+          return;
+        }
+        if (!mounted) {
           videoState.resetPlayer();
           return;
         }
@@ -561,17 +247,21 @@ class _VideoUploadUIState extends State<VideoUploadUI>
           title: '选择来源',
           content: '请选择视频来源',
           actions: [
-            HoverScaleTextButton(
+            AdaptiveMediaActionButton(
+              label: '相册',
               onPressed: () {
                 Navigator.of(context).pop('album');
               },
-              child: const Text('相册'),
+              desktopIcon: Icons.photo_library_outlined,
+              phoneIcon: cupertino.CupertinoIcons.photo_on_rectangle,
             ),
-            HoverScaleTextButton(
+            AdaptiveMediaActionButton(
+              label: '文件管理器',
               onPressed: () {
                 Navigator.of(context).pop('file'); // 先 pop
               },
-              child: const Text('文件管理器'),
+              desktopIcon: Icons.folder_open_rounded,
+              phoneIcon: cupertino.CupertinoIcons.folder_open,
             ),
           ],
         );
@@ -584,11 +274,14 @@ class _VideoUploadUIState extends State<VideoUploadUI>
             PermissionStatus photoStatus;
             PermissionStatus videoStatus;
             // 请求照片和视频权限 (Android 13+ 需要)
-            print("Requesting photos and videos permissions for Android...");
+            debugPrint(
+              'Requesting photos and videos permissions for Android...',
+            );
             photoStatus = await Permission.photos.request();
             videoStatus = await Permission.videos.request();
-            print(
-              "Android permissions status: Photos=$photoStatus, Videos=$videoStatus",
+            debugPrint(
+              'Android permissions status: Photos=$photoStatus, '
+              'Videos=$videoStatus',
             );
 
             if (!mounted) return;
@@ -598,8 +291,9 @@ class _VideoUploadUIState extends State<VideoUploadUI>
             } else {
               // Android 权限被拒绝
               if (!mounted) return;
-              print(
-                "Android permissions not granted. Photo status: $photoStatus, Video status: $videoStatus",
+              debugPrint(
+                'Android permissions not granted. Photo status: $photoStatus, '
+                'Video status: $videoStatus',
               );
               if (photoStatus.isPermanentlyDenied ||
                   videoStatus.isPermanentlyDenied) {
@@ -608,16 +302,19 @@ class _VideoUploadUIState extends State<VideoUploadUI>
                   title: '权限被永久拒绝',
                   content: '您已永久拒绝相关权限。请前往系统设置手动为NipaPlay开启所需权限。',
                   actions: [
-                    HoverScaleTextButton(
+                    AdaptiveMediaActionButton(
+                      label: '前往设置',
                       onPressed: () {
                         Navigator.of(context).pop();
                         openAppSettings();
                       },
-                      child: const Text('前往设置'),
+                      desktopIcon: Icons.settings_outlined,
+                      phoneIcon: cupertino.CupertinoIcons.settings,
+                      emphasis: AdaptiveMediaActionEmphasis.primary,
                     ),
-                    HoverScaleTextButton(
+                    AdaptiveMediaActionButton(
+                      label: '取消',
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('取消'),
                     ),
                   ],
                 );
@@ -627,14 +324,16 @@ class _VideoUploadUIState extends State<VideoUploadUI>
             }
           } else if (io.Platform.isIOS) {
             // 在 iOS 上直接尝试选择
-            print(
-              "iOS: Bypassing permission_handler, directly calling ImagePicker.",
+            debugPrint(
+              'iOS: Bypassing permission_handler, directly calling '
+              'ImagePicker.',
             );
             await _pickMediaFromGallery();
           } else {
             // 其他平台 (如果支持，也直接尝试)
-            print(
-              "Other platform: Bypassing permission_handler, directly calling ImagePicker/FilePicker.",
+            debugPrint(
+              'Other platform: Bypassing permission_handler, directly '
+              'calling ImagePicker/FilePicker.',
             );
             await _pickMediaFromGallery(); // 或者根据平台选择不同的picker逻辑
           }
@@ -670,12 +369,7 @@ class _VideoUploadUIState extends State<VideoUploadUI>
 
                 // 然后在下一帧初始化播放器
                 Future.microtask(() async {
-                  if (context.mounted) {
-                    await Provider.of<VideoPlayerState>(
-                      context,
-                      listen: false,
-                    ).initializePlayer(filePath);
-                  }
+                  await videoState.initializePlayer(filePath);
                 });
               } else {
                 // 用户取消了选择，清除加载状态
@@ -692,7 +386,7 @@ class _VideoUploadUIState extends State<VideoUploadUI>
                   listen: false,
                 ).resetPlayer();
               } else {
-                print('选择文件出错但 widget 已 unmounted: $e');
+                debugPrint('选择文件出错但 widget 已 unmounted: $e');
               }
             }
           });
@@ -705,6 +399,10 @@ class _VideoUploadUIState extends State<VideoUploadUI>
 
         final filePickerService = FilePickerService();
         final filePath = await filePickerService.pickVideoFile();
+        if (!mounted) {
+          videoState.resetPlayer();
+          return;
+        }
 
         if (filePath != null) {
           // 此处不需要再次设置加载状态，因为已经在选择文件前设置了
@@ -728,6 +426,7 @@ class _VideoUploadUIState extends State<VideoUploadUI>
         }
       }
     } catch (e) {
+      if (!mounted) return;
       BlurSnackBar.show(context, '选择视频时出错: $e');
     }
   }
@@ -768,14 +467,14 @@ class _VideoUploadUIState extends State<VideoUploadUI>
         });
       } else {
         // 用户可能取消了选择，或者 image_picker 因为权限问题返回了 null
-        print(
-          "Media picking cancelled or failed (possibly due to permissions).",
+        debugPrint(
+          'Media picking cancelled or failed (possibly due to permissions).',
         );
         videoState.resetPlayer(); // 清除加载状态
       }
     } catch (e) {
       if (!mounted) return;
-      print("Error picking media from gallery: $e");
+      debugPrint('Error picking media from gallery: $e');
       BlurSnackBar.show(context, '选择相册视频出错: $e');
       // 发生错误时清除加载状态
       Provider.of<VideoPlayerState>(context, listen: false).resetPlayer();

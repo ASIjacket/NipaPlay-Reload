@@ -67,6 +67,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       // 立即重置屏幕方向，不受后续等待阻塞，避免用户被卡在横屏状态
       if (globals.isMobilePlatform) {
         await ScreenOrientationManager.instance.resetOrientation();
+        _isFullscreen = false;
         await _restoreSystemUiOverlayStyleIfNeeded();
       }
 
@@ -304,6 +305,16 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       // if (_statusMessages.length > 10) {
       //   _statusMessages.removeAt(0);
       // }
+    }
+
+    final preservePlaybackStatus = _isBackgroundDanmakuLoading &&
+        (_status == PlayerStatus.playing || _status == PlayerStatus.paused) &&
+        (newStatus == PlayerStatus.recognizing ||
+            newStatus == PlayerStatus.ready ||
+            newStatus == PlayerStatus.playing);
+    if (preservePlaybackStatus) {
+      _notifyListeners();
+      return;
     }
 
     _status = newStatus;
@@ -656,6 +667,8 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   }
 
   void _clearPreviousVideoState() {
+    _playbackGeneration++;
+    _isBackgroundDanmakuLoading = false;
     // ════════════════════════════════════════════════════════════════════
     //  切集时清理平滑时钟锚点 + _pausedPlaybackTimeMs（2026-06-21）
     // ════════════════════════════════════════════════════════════════════
@@ -693,6 +706,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _episodeId = null; // 清除弹幕ID
     _animeId = null; // 清除弹幕ID
     _initialHistoryItem = null;
+    _playbackDetailContext = null;
     _danmakuList.clear();
     _danmakuListVersion++;
     _danmakuTracks.clear();
@@ -766,6 +780,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _episodeId = null; // 清除弹幕ID
     _animeId = null; // 清除弹幕ID
     _initialHistoryItem = null;
+    _playbackDetailContext = null;
     _danmakuList.clear();
     _danmakuListVersion++;
     _danmakuTracks.clear();
@@ -1047,11 +1062,29 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     return !_isFullscreen;
   }
 
-  // 切换全屏状态（仅用于桌面平台）
+  // 手机上在横屏全屏和竖屏窗口布局之间切换；桌面端切换系统全屏。
   Future<void> toggleFullscreen() async {
     if (kIsWeb) return;
-    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) return;
     if (_isFullscreenTransitioning) return;
+
+    if (globals.isPhone) {
+      _isFullscreenTransitioning = true;
+      try {
+        if (_isFullscreen) {
+          await ScreenOrientationManager.instance.setPhonePlaybackPortrait();
+          _isFullscreen = false;
+        } else {
+          await ScreenOrientationManager.instance.setPhonePlaybackLandscape();
+          _isFullscreen = true;
+        }
+        _notifyListeners();
+      } finally {
+        _isFullscreenTransitioning = false;
+      }
+      return;
+    }
+
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) return;
 
     _isFullscreenTransitioning = true;
     try {
@@ -1280,32 +1313,15 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   void _showSeekIndicator() {
     if (!globals.isMobilePlatform || _context == null) return;
 
-    final uiThemeProvider = Provider.of<UIThemeProvider>(
-      _context!,
-      listen: false,
-    );
-    final bool useCupertinoStyle =
-        uiThemeProvider.isCupertinoTheme && globals.isPhone;
-
     _isSeekIndicatorVisible = true;
 
     if (_seekOverlayEntry == null) {
       _seekOverlayEntry = OverlayEntry(
         builder: (context) {
-          final seekWidget = useCupertinoStyle
-              ? const CupertinoSeekIndicator()
-              : const SeekIndicator();
-          Widget overlayChild = ChangeNotifierProvider<VideoPlayerState>.value(
+          return ChangeNotifierProvider<VideoPlayerState>.value(
             value: this,
-            child: seekWidget,
+            child: const SeekIndicator(),
           );
-          if (useCupertinoStyle) {
-            overlayChild = ChangeNotifierProvider<UIThemeProvider>.value(
-              value: uiThemeProvider,
-              child: overlayChild,
-            );
-          }
-          return overlayChild;
         },
       );
       Overlay.of(_context!).insert(_seekOverlayEntry!);

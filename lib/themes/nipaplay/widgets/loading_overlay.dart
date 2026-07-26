@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
+import 'package:nipaplay/services/bangumi_service.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -29,6 +30,7 @@ class LoadingOverlay extends StatefulWidget {
   final String? episodeTitle;
   final String? fileName;
   final int? animeId;
+  final String? coverImageUrl;
 
   const LoadingOverlay({
     super.key,
@@ -49,6 +51,7 @@ class LoadingOverlay extends StatefulWidget {
     this.episodeTitle,
     this.fileName,
     this.animeId,
+    this.coverImageUrl,
   });
 
   @override
@@ -80,6 +83,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
   @override
   void initState() {
     super.initState();
+    _coverImageUrl = _resolveImmediateCoverUrl();
     // 设置光标闪烁动画
     _cursorController = AnimationController(
       vsync: this,
@@ -112,8 +116,9 @@ class _LoadingOverlayState extends State<LoadingOverlay>
         }
       });
     }
-    if (oldWidget.animeId != widget.animeId) {
-      _coverImageUrl = null; // 清空前URL 避免显示上一部视频的封面
+    if (oldWidget.animeId != widget.animeId ||
+        oldWidget.coverImageUrl != widget.coverImageUrl) {
+      _coverImageUrl = _resolveImmediateCoverUrl();
       _updateAnimeCoverUrl();
     }
   }
@@ -132,6 +137,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
     final bool isDark = theme.brightness == Brightness.dark;
     final bool hasCoverImage =
         _coverImageUrl != null && _coverImageUrl!.isNotEmpty;
+    final bool isPhoneSurface = globals.isPhone && !globals.isTablet;
 
     // 计算比例尺寸时考虑屏幕大小，修复clamp参数顺序问题
     final screenWidth = MediaQuery.of(context).size.width;
@@ -161,9 +167,14 @@ class _LoadingOverlayState extends State<LoadingOverlay>
       colorScheme.onSurface,
       isDark ? 0.12 : 0.04,
     )!;
-    final Color cardColor = baseSurface.withOpacity(isDark ? 0.92 : 0.96);
-    final Color cardBorderColor =
-        colorScheme.onSurface.withOpacity(isDark ? 0.2 : 0.12);
+    final Color cardColor = isPhoneSurface
+        ? (isDark ? const Color(0xF2252527) : const Color(0xFAF7F7F8))
+        : baseSurface.withOpacity(isDark ? 0.92 : 0.96);
+    final Color cardBorderColor = isPhoneSurface
+        ? (isDark
+            ? Colors.white.withValues(alpha: 0.14)
+            : Colors.black.withValues(alpha: 0.09))
+        : colorScheme.onSurface.withOpacity(isDark ? 0.2 : 0.12);
     final Color cardShadowColor =
         Colors.black.withOpacity(isDark ? 0.45 : 0.16);
     final Color cursorColor =
@@ -208,8 +219,8 @@ class _LoadingOverlayState extends State<LoadingOverlay>
                     child: CachedNetworkImageWidget(
                       imageUrl: _coverImageUrl!,
                       fit: BoxFit.cover,
-                      shouldCompress: false,
-                      loadMode: CachedImageLoadMode.hybrid,
+                      fadeDuration: Duration.zero,
+                      loadMode: CachedImageLoadMode.legacy,
                     ),
                   ),
                 ),
@@ -395,10 +406,12 @@ class _LoadingOverlayState extends State<LoadingOverlay>
       child: _coverImageUrl != null
           ? ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                _coverImageUrl!,
+              child: CachedNetworkImageWidget(
+                imageUrl: _coverImageUrl!,
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
+                fadeDuration: Duration.zero,
+                loadMode: CachedImageLoadMode.legacy,
+                errorBuilder: (context, error) {
                   return Container(
                     decoration: BoxDecoration(
                       color: accentColor.withOpacity(0.1),
@@ -548,12 +561,34 @@ class _LoadingOverlayState extends State<LoadingOverlay>
 
   Future<void> _updateAnimeCoverUrl() async {
     final animeId = widget.animeId;
-    final url = await _getAnimeCoverUrl(animeId);
+    final immediateUrl = _resolveImmediateCoverUrl();
+    final url = immediateUrl ?? await _getAnimeCoverUrl(animeId);
     if (mounted && widget.animeId == animeId && _coverImageUrl != url) {
       setState(() {
         _coverImageUrl = url;
       });
     }
+  }
+
+  String? _resolveImmediateCoverUrl() {
+    final suppliedUrl = _validNetworkUrl(widget.coverImageUrl);
+    if (suppliedUrl != null) return suppliedUrl;
+
+    final animeId = widget.animeId;
+    if (animeId == null || animeId <= 0) return null;
+    return _validNetworkUrl(
+      BangumiService.instance.getAnimeDetailsFromMemory(animeId)?.imageUrl,
+    );
+  }
+
+  String? _validNetworkUrl(String? value) {
+    final normalized = value?.trim();
+    if (normalized == null || normalized.isEmpty) return null;
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+    return normalized;
   }
 }
 

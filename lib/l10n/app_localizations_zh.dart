@@ -27,6 +27,198 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabAccount => '个人中心';
 
   @override
+  String get tabDanmakuConsole => '弹幕控制台';
+
+  @override
+  String get externalPlayerConsoleTitle => '外部播放器弹幕控制台';
+
+  @override
+  String get externalPlayerConsoleEmptyTitle => '尚未启动外部播放器';
+
+  @override
+  String get externalPlayerConsoleEmptyDescription =>
+      '通过外部播放器开始播放后，会话信息和控制操作将显示在这里。';
+
+  @override
+  String get externalPlayerConsoleAnime => '番剧';
+
+  @override
+  String get externalPlayerConsoleEpisode => '剧集';
+
+  @override
+  String get externalPlayerConsoleEpisodeId => '剧集 ID';
+
+  @override
+  String get externalPlayerConsoleProcessId => '播放器 PID';
+
+  @override
+  String get externalPlayerConsoleMediaPath => '媒体路径';
+
+  @override
+  String get externalPlayerConsoleUnknownAnime => '未知番剧';
+
+  @override
+  String get externalPlayerConsoleUnknownEpisode => '未知剧集';
+
+  @override
+  String get externalPlayerConsoleProgress => '播放进度';
+
+  @override
+  String get externalPlayerConsoleProgressUnsupported => '当前播放器暂不支持进度同步。';
+
+  @override
+  String get externalPlayerConsoleProgressLoading => '正在获取播放进度…';
+
+  @override
+  String get externalPlayerConsoleTimestampLabel => '精确时间戳';
+
+  @override
+  String get externalPlayerConsoleTimestampHint => '时:分:秒 / 分:秒 / 秒数';
+
+  @override
+  String get externalPlayerConsoleTimestampInvalid => '请输入有效的时间戳';
+
+  @override
+  String get externalPlayerConsoleTimestampSeek => '精确跳转';
+
+  @override
+  String get externalPlayerConsoleDanmakuList => '弹幕列表';
+
+  @override
+  String externalPlayerConsoleDanmakuStats(int total, int active) {
+    return '共 $total 条，正在显示 $active 条';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuEmpty => '本次播放没有加载弹幕。';
+
+  @override
+  String get externalPlayerConsoleDanmakuUnknownSender => '未知';
+
+  @override
+  String get externalPlayerConsoleDanmakuSender => '发送者';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeScroll => '滚动';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeTop => '顶部';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeBottom => '底部';
+
+  @override
+  String get externalPlayerConsoleDanmakuActive => '正在显示';
+
+  @override
+  String get externalPlayerConsoleDanmakuFollowEnabled => '正在跟随播放';
+
+  @override
+  String get externalPlayerConsoleDanmakuFollowDisabled => '已暂停自动跟随';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordFilter => '弹幕屏蔽规则';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordHint => '输入规则内容';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordAdd => '添加';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlocked => '已被屏蔽';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeKeyword => '关键词';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeRegex => '正则表达式';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeSender => '发送者 ID';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockInvalid => '请输入有效且未重复的规则';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockRemove => '删除规则';
+
+  @override
+  String get externalPlayerConsoleDanmakuShow => '显示弹幕';
+
+  @override
+  String get externalPlayerConsoleDanmakuHide => '隐藏弹幕';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetTitle => '弹幕时间偏移';
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetAdvance(String seconds) {
+    return '提前 $seconds 秒';
+  }
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetDelay(String seconds) {
+    return '延后 $seconds 秒';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetReset => '恢复初始';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCustomLabel => '自定义偏移秒数';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCustomHint => '负数提前，正数延后';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetInvalid => '请输入有效的秒数';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetApply => '应用';
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetCurrentAdvance(String seconds) {
+    return '当前弹幕提前出现 $seconds 秒';
+  }
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetCurrentDelay(String seconds) {
+    return '当前弹幕延后出现 $seconds 秒';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCurrentNone => '当前弹幕偏移量为 0 秒';
+
+  @override
+  String get danmakuOpacityTitle => '弹幕不透明度';
+
+  @override
+  String get danmakuFontSizeTitle => '弹幕字体大小';
+
+  @override
+  String get danmakuOpacitySubtitle => '调整弹幕文字不透明度，新打开的视频将应用此设置。';
+
+  @override
+  String get danmakuOutlineEnabledTitle => '启用弹幕描边';
+
+  @override
+  String get danmakuOutlineEnabledSubtitle =>
+      '0 为无描边，1 为细边，2 为原来的粗边；新打开的视频将应用此设置。';
+
+  @override
+  String get danmakuOutlineWidthTitle => '弹幕描边粗细';
+
+  @override
+  String get externalPlayerConsoleResume => '继续播放';
+
+  @override
+  String get externalPlayerConsolePause => '暂停';
+
+  @override
+  String get externalPlayerConsoleClose => '关闭播放器';
+
+  @override
   String get tabSettings => '设置';
 
   @override
@@ -1674,6 +1866,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appreciationCode => '赞赏码';
 
   @override
+  String get appreciationCodeHint => '点击查看赞赏码';
+
+  @override
   String get appreciationImageLoadFailed => '赞赏码图片加载失败';
 
   @override
@@ -1769,6 +1964,198 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get tabAccount => '個人中心';
+
+  @override
+  String get tabDanmakuConsole => '彈幕控制台';
+
+  @override
+  String get externalPlayerConsoleTitle => '外部播放器彈幕控制台';
+
+  @override
+  String get externalPlayerConsoleEmptyTitle => '尚未啟動外部播放器';
+
+  @override
+  String get externalPlayerConsoleEmptyDescription =>
+      '透過外部播放器開始播放後，工作階段資訊和控制操作將顯示在這裡。';
+
+  @override
+  String get externalPlayerConsoleAnime => '番劇';
+
+  @override
+  String get externalPlayerConsoleEpisode => '劇集';
+
+  @override
+  String get externalPlayerConsoleEpisodeId => '劇集 ID';
+
+  @override
+  String get externalPlayerConsoleProcessId => '播放器 PID';
+
+  @override
+  String get externalPlayerConsoleMediaPath => '媒體路徑';
+
+  @override
+  String get externalPlayerConsoleUnknownAnime => '未知番劇';
+
+  @override
+  String get externalPlayerConsoleUnknownEpisode => '未知劇集';
+
+  @override
+  String get externalPlayerConsoleProgress => '播放進度';
+
+  @override
+  String get externalPlayerConsoleProgressUnsupported => '目前播放器暫不支援進度同步。';
+
+  @override
+  String get externalPlayerConsoleProgressLoading => '正在取得播放進度…';
+
+  @override
+  String get externalPlayerConsoleTimestampLabel => '精確時間戳';
+
+  @override
+  String get externalPlayerConsoleTimestampHint => '時:分:秒 / 分:秒 / 秒數';
+
+  @override
+  String get externalPlayerConsoleTimestampInvalid => '請輸入有效的時間戳';
+
+  @override
+  String get externalPlayerConsoleTimestampSeek => '精確跳轉';
+
+  @override
+  String get externalPlayerConsoleDanmakuList => '彈幕列表';
+
+  @override
+  String externalPlayerConsoleDanmakuStats(int total, int active) {
+    return '共 $total 條，正在顯示 $active 條';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuEmpty => '本次播放沒有載入彈幕。';
+
+  @override
+  String get externalPlayerConsoleDanmakuUnknownSender => '未知';
+
+  @override
+  String get externalPlayerConsoleDanmakuSender => '發送者';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeScroll => '滾動';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeTop => '頂部';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeBottom => '底部';
+
+  @override
+  String get externalPlayerConsoleDanmakuActive => '正在顯示';
+
+  @override
+  String get externalPlayerConsoleDanmakuFollowEnabled => '正在跟隨播放';
+
+  @override
+  String get externalPlayerConsoleDanmakuFollowDisabled => '已暫停自動跟隨';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordFilter => '彈幕封鎖規則';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordHint => '輸入規則內容';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordAdd => '新增';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlocked => '已被封鎖';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeKeyword => '關鍵詞';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeRegex => '正則表達式';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeSender => '發送者 ID';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockInvalid => '請輸入有效且未重複的規則';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockRemove => '刪除規則';
+
+  @override
+  String get externalPlayerConsoleDanmakuShow => '顯示彈幕';
+
+  @override
+  String get externalPlayerConsoleDanmakuHide => '隱藏彈幕';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetTitle => '彈幕時間偏移';
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetAdvance(String seconds) {
+    return '提前 $seconds 秒';
+  }
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetDelay(String seconds) {
+    return '延後 $seconds 秒';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetReset => '恢復初始';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCustomLabel => '自訂偏移秒數';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCustomHint => '負數提前，正數延後';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetInvalid => '請輸入有效的秒數';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetApply => '套用';
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetCurrentAdvance(String seconds) {
+    return '目前彈幕提前出現 $seconds 秒';
+  }
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetCurrentDelay(String seconds) {
+    return '目前彈幕延後出現 $seconds 秒';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCurrentNone => '目前彈幕偏移量為 0 秒';
+
+  @override
+  String get danmakuOpacityTitle => '彈幕不透明度';
+
+  @override
+  String get danmakuFontSizeTitle => '彈幕字體大小';
+
+  @override
+  String get danmakuOpacitySubtitle => '調整彈幕文字不透明度，新開啟的影片將套用此設定。';
+
+  @override
+  String get danmakuOutlineEnabledTitle => '啟用彈幕描邊';
+
+  @override
+  String get danmakuOutlineEnabledSubtitle =>
+      '0 為無描邊，1 為細邊，2 為原本的粗邊；新開啟的影片將套用此設定。';
+
+  @override
+  String get danmakuOutlineWidthTitle => '彈幕描邊粗細';
+
+  @override
+  String get externalPlayerConsoleResume => '繼續播放';
+
+  @override
+  String get externalPlayerConsolePause => '暫停';
+
+  @override
+  String get externalPlayerConsoleClose => '關閉播放器';
 
   @override
   String get tabSettings => '設定';
@@ -3415,6 +3802,9 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get appreciationCode => '贊賞碼';
+
+  @override
+  String get appreciationCodeHint => '點擊查看贊賞碼';
 
   @override
   String get appreciationImageLoadFailed => '贊賞碼圖片載入失敗';

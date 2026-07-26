@@ -459,8 +459,15 @@ impl Next2Renderer {
         self.interp_dt = if elapsed < 0.050 { elapsed } else { 0.0 };
         let interp_dt = self.interp_dt as f64;
 
-        for item in self.frame_items.clone().iter() {
-            let outline_px = resolve_outline_px(item.font_size, item.outline_width);
+        // Take `frame_items` out of `self` so the loop body can borrow `self`
+        // mutably (push_quad / push_shadow_quad / atlas.entry_for all need
+        // &mut self) without contending with a shared borrow of self.frame_items.
+        // The Vec move is O(1) (pointer swap); previously this cloned the whole
+        // Vec plus every token's String on every frame.
+        let frame_items = std::mem::take(&mut self.frame_items);
+        for item in &frame_items {
+            let outline_px =
+                super::resolve_danmaku_outline_px(item.font_size, item.outline_width);
             let shadow = resolve_shadow(item.font_size, item.shadow_style);
             let fill_color = argb_to_linear(item.color_argb, item.opacity);
             let outline_color = stroke_color(fill_color);
@@ -474,7 +481,7 @@ impl Next2Renderer {
             let mut cursor_x = (item.x + item.scroll_speed as f64 * interp_dt) as f32;
             let quantized_size = item.font_size.round().clamp(8.0, 256.0) as u32;
             let baseline_y = item.y as f32 + self.atlas.line_ascent(quantized_size);
-            let tokens = item.tokens.clone();
+            let tokens = &item.tokens;
 
             for token in tokens {
                 match token {
@@ -500,10 +507,10 @@ impl Next2Renderer {
 
                             if shadow.opacity > 0.0 {
                                 self.push_shadow_quad(
-                                    (glyph_left + shadow.offset_x) * SHADOW_RENDER_SCALE as f32,
-                                    (glyph_top + shadow.offset_y) * SHADOW_RENDER_SCALE as f32,
-                                    (glyph_right + shadow.offset_x) * SHADOW_RENDER_SCALE as f32,
-                                    (glyph_bottom + shadow.offset_y) * SHADOW_RENDER_SCALE as f32,
+                                    (glyph_left + shadow.offset_x) * SHADOW_RENDER_SCALE,
+                                    (glyph_top + shadow.offset_y) * SHADOW_RENDER_SCALE,
+                                    (glyph_right + shadow.offset_x) * SHADOW_RENDER_SCALE,
+                                    (glyph_bottom + shadow.offset_y) * SHADOW_RENDER_SCALE,
                                     entry.uv_min,
                                     entry.uv_max,
                                     entry.uv_min,
@@ -531,7 +538,7 @@ impl Next2Renderer {
                         }
                     }
                     FrameToken::Emoji(id) => {
-                        let Some(entry) = self.emoji_atlas.entry_for(&id).cloned() else {
+                        let Some(entry) = self.emoji_atlas.entry_for(id).cloned() else {
                             cursor_x += quantized_size as f32;
                             continue;
                         };
@@ -546,10 +553,10 @@ impl Next2Renderer {
 
                         if shadow.opacity > 0.0 {
                             self.push_shadow_quad(
-                                (glyph_left + shadow.offset_x) * SHADOW_RENDER_SCALE as f32,
-                                (glyph_top + shadow.offset_y) * SHADOW_RENDER_SCALE as f32,
-                                (glyph_right + shadow.offset_x) * SHADOW_RENDER_SCALE as f32,
-                                (glyph_bottom + shadow.offset_y) * SHADOW_RENDER_SCALE as f32,
+                                (glyph_left + shadow.offset_x) * SHADOW_RENDER_SCALE,
+                                (glyph_top + shadow.offset_y) * SHADOW_RENDER_SCALE,
+                                (glyph_right + shadow.offset_x) * SHADOW_RENDER_SCALE,
+                                (glyph_bottom + shadow.offset_y) * SHADOW_RENDER_SCALE,
                                 entry.uv_min,
                                 entry.uv_max,
                                 entry.mask_uv_min,
@@ -579,41 +586,14 @@ impl Next2Renderer {
             }
         }
 
-        if !self.frame_items.is_empty() {
-            self.atlas_bind_group = self
-                .ctx
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("next2 atlas bg"),
-                    layout: &self.atlas_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.atlas.texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.atlas.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(
-                                &self.emoji_atlas.color_texture_view,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::TextureView(
-                                &self.emoji_atlas.mask_texture_view,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: wgpu::BindingResource::Sampler(&self.emoji_atlas.sampler),
-                        },
-                    ],
-                });
-        }
+        // Restore the frame_items taken before the loop.
+        self.frame_items = frame_items;
+
+        // atlas_bind_group is created at construction and rebuilt only on font
+        // switch via rebuild_atlas_bind_group (renderer_core.rs). The glyph and
+        // emoji atlases reuse the same texture objects across uploads (clear()
+        // only resets the cursor, never recreates the texture), so the bind
+        // group stays valid between frames — no per-frame rebuild needed.
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -795,17 +775,6 @@ fn to_ndc(x: f32, y: f32, width: f32, height: f32) -> [f32; 2] {
     let nx = (x / width) * 2.0 - 1.0;
     let ny = 1.0 - (y / height) * 2.0;
     [nx, ny]
-}
-
-fn resolve_outline_px(font_size: f32, width_multiplier: f32) -> f32 {
-    if !width_multiplier.is_finite() {
-        return 0.0;
-    }
-    let width_multiplier = width_multiplier.clamp(0.0, 4.0);
-    if width_multiplier <= 0.0 {
-        return 0.0;
-    }
-    (font_size * 0.06).clamp(1.0, 2.6) * width_multiplier
 }
 
 #[derive(Copy, Clone)]
@@ -999,6 +968,67 @@ fn intersection_1d(f: &[f32], i: usize, j: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_msdf_generation_matches_serial_generation() {
+        let fonts = std::sync::Arc::new(load_font_chain(None).expect("load test fonts"));
+        let cases = [('医', 50.0_f32), ('院', 50.0_f32), ('弹', 36.0_f32), ('幕', 36.0_f32)];
+
+        let serial: Vec<_> = cases
+            .iter()
+            .map(|&(ch, px)| rasterize_glyph_on_face(fonts.as_slice(), ch, px).unwrap())
+            .collect();
+        let workers: Vec<_> = cases
+            .iter()
+            .map(|&(ch, px)| {
+                let fonts = std::sync::Arc::clone(&fonts);
+                std::thread::spawn(move || {
+                    rasterize_glyph_on_face(fonts.as_slice(), ch, px).unwrap()
+                })
+            })
+            .collect();
+        let parallel: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("MSDF worker panicked"))
+            .collect();
+
+        for (serial, parallel) in serial.iter().zip(parallel.iter()) {
+            assert_eq!(parallel.width, serial.width);
+            assert_eq!(parallel.height, serial.height);
+            assert_eq!(parallel.pixels, serial.pixels);
+        }
+    }
+
+    #[test]
+    fn thick_outline_keeps_the_mtsdf_quad_border_transparent() {
+        let fonts = load_font_chain(None).expect("load test fonts");
+        let glyph = rasterize_glyph_on_face(fonts.as_slice(), '医', 50.0)
+            .expect("rasterize test glyph");
+        let outline_px = crate::next2_engine::resolve_danmaku_outline_px(256.0, 2.0);
+        let antialias_px = 1.0_f32;
+
+        let border_alpha = (0..glyph.width)
+            .flat_map(|x| [(x, 0), (x, glyph.height - 1)])
+            .chain((0..glyph.height).flat_map(|y| [(0, y), (glyph.width - 1, y)]));
+        for (x, y) in border_alpha {
+            let alpha = glyph.pixels[((y * glyph.width + x) * 4 + 3) as usize] as f32 / 255.0;
+            let distance = (alpha - 0.5) * glyph.spread;
+            let coverage = smoothstep_for_test(
+                -outline_px - antialias_px,
+                -outline_px + antialias_px,
+                distance,
+            );
+            assert!(
+                coverage <= 0.0001,
+                "quad border became visible at ({x}, {y}): distance={distance}, coverage={coverage}"
+            );
+        }
+    }
+
+    fn smoothstep_for_test(edge0: f32, edge1: f32, value: f32) -> f32 {
+        let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
 
     #[test]
     fn emoji_sdf_mask_keeps_inside_above_midpoint() {

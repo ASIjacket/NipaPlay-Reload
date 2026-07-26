@@ -5,7 +5,9 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/constants/danmaku/mode.dart';
 import 'package:nipaplay/utils/network_settings.dart';
+import 'package:nipaplay/utils/danmaku_parser.dart';
 import 'package:nipaplay/constants/settings_keys.dart';
 import 'danmaku_cache_manager.dart';
 import 'debug_log_service.dart';
@@ -13,6 +15,8 @@ import 'android_saf_service.dart';
 import 'package:nipaplay/utils/remote_media_fetcher.dart';
 import 'package:nipaplay/utils/media_filename_parser.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
+import 'package:nipaplay/src/rust/api/media_probe.dart' as rust_media;
+import 'package:nipaplay/src/rust/rust_init.dart';
 
 class DandanplayService {
   static const String appId = "nipaplayv1";
@@ -1499,6 +1503,15 @@ class DandanplayService {
   static Future<String> _d(File file) async {
     if (kIsWeb) return '';
     const int maxBytes = 16 * 1024 * 1024; // 16MB
+    try {
+      await ensureRustInitialized();
+      return await rust_media.hashFileHead(
+        filePath: file.path,
+        maxBytes: maxBytes,
+      );
+    } catch (error) {
+      debugPrint('DandanplayService: Rust 文件哈希失败，回退 Dart: $error');
+    }
     final bytes =
         await file.openRead(0, maxBytes).expand((chunk) => chunk).toList();
     return md5.convert(bytes).toString();
@@ -1573,7 +1586,7 @@ class DandanplayService {
 
   static Future<int> _getDanmakuChConvertFlag() async {
     final prefs = await SharedPreferences.getInstance();
-    final convert = prefs.getBool('danmaku_convert_to_simplified') ?? true;
+    final convert = prefs.getBool(SettingsKeys.danmakuConvertToSimplified) ?? true;
     return convert ? 1 : 0;
   }
 
@@ -1702,12 +1715,14 @@ class DandanplayService {
       ////debugPrint('获取到原始弹幕数: ${comments.length}');
 
       final formattedComments = comments.map((comment) {
+        final raw = Map<String, dynamic>.from(comment as Map);
         // 解析 p 字段，格式为 "时间,模式,颜色,用户ID"
-        final pParts = (comment['p'] as String).split(',');
+        final pParts = (raw['p'] as String).split(',');
         final time = double.tryParse(pParts[0]) ?? 0.0;
-        final mode = int.tryParse(pParts[1]) ?? 1;
+        final mode = DanmakuMode.fromCode(int.tryParse(pParts[1]));
         final color = int.tryParse(pParts[2]) ?? 16777215; // 默认白色
-        final content = comment['m'] as String;
+        final content = raw['m'] as String;
+        final senderId = resolveDanmakuSenderId(raw);
 
         // 转换颜色格式
         final r = (color >> 16) & 0xFF;
@@ -1718,13 +1733,12 @@ class DandanplayService {
         return {
           'time': time,
           'content': content,
-          'type': mode == 1
-              ? 'scroll'
-              : mode == 5
-                  ? 'top'
-                  : 'bottom',
+          'type': mode.typeName,
           'color': colorValue,
           'isMe': false,
+          if (senderId != null) 'senderId': senderId,
+          if (raw['cid'] != null) 'cid': raw['cid'],
+          'source': 'dandanplay',
         };
       }).toList();
 
@@ -2633,11 +2647,7 @@ class DandanplayService {
           final formattedDanmaku = {
             'time': time,
             'content': comment,
-            'type': mode == 1
-                ? 'scroll'
-                : mode == 5
-                    ? 'top'
-                    : 'bottom',
+            'type': DanmakuMode.fromCode(mode).typeName,
             'color': colorValue,
             'isMe': true,
           };

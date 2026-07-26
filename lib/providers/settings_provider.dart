@@ -15,8 +15,6 @@ class SettingsProvider with ChangeNotifier {
 
   // 弹幕转换简体中文设置
   bool _danmakuConvertToSimplified = true; // 默认开启
-  static const String _danmakuConvertKey = 'danmaku_convert_to_simplified';
-
   // 哈希匹配失败后自动选择搜索第一个结果（避免弹窗）
   bool _autoMatchDanmakuFirstSearchResultOnHashFail = true; // 默认开启
 
@@ -24,10 +22,15 @@ class SettingsProvider with ChangeNotifier {
   bool _autoMatchDanmakuOnPlay = true; // 默认开启
   DanmakuAutoLoadStrategy _danmakuAutoLoadStrategy =
       DanmakuAutoLoadStrategy.remoteAndLocal;
+  bool _fastPlaybackStartup = false;
 
   // 外部播放器设置
   bool _useExternalPlayer = false;
   String _externalPlayerPath = '';
+  bool _externalPlayerDanmakuOverlay = true; // 弹幕外挂默认开启
+  bool _externalPlayerAutoSwitchToDanmakuConsole = true;
+  bool _externalPlayerShrinkWindow = false;
+  bool _externalPlayerConsoleWindowMode = false;
 
   // GitHub 代理设置
   String _githubProxyUrl = '';
@@ -44,8 +47,14 @@ class SettingsProvider with ChangeNotifier {
   bool get autoMatchDanmakuOnPlay => _autoMatchDanmakuOnPlay;
   DanmakuAutoLoadStrategy get danmakuAutoLoadStrategy =>
       _danmakuAutoLoadStrategy;
+  bool get fastPlaybackStartup => _fastPlaybackStartup;
   bool get useExternalPlayer => _useExternalPlayer;
   String get externalPlayerPath => _externalPlayerPath;
+  bool get externalPlayerDanmakuOverlay => _externalPlayerDanmakuOverlay;
+  bool get externalPlayerAutoSwitchToDanmakuConsole =>
+      _externalPlayerAutoSwitchToDanmakuConsole;
+  bool get externalPlayerShrinkWindow => _externalPlayerShrinkWindow;
+  bool get externalPlayerConsoleWindowMode => _externalPlayerConsoleWindowMode;
   String get githubProxyUrl => _githubProxyUrl;
   double get danmakuSupersample => _danmakuSupersample;
 
@@ -58,11 +67,13 @@ class SettingsProvider with ChangeNotifier {
     // Load blur power, defaulting to 0.0 if not set (无模糊)
     _blurPower = _prefs.getDouble(_blurPowerKey) ?? _defaultBlur;
     // 当用户仍为“自动语言”且系统为繁中时，首次默认关闭“弹幕转简体”。
-    final savedDanmakuConvert = _prefs.getBool(_danmakuConvertKey);
+    final savedDanmakuConvert =
+        _prefs.getBool(SettingsKeys.danmakuConvertToSimplified);
     if (savedDanmakuConvert != null) {
       _danmakuConvertToSimplified = savedDanmakuConvert;
     } else {
-      final languageMode = _prefs.getString(SettingsKeys.appLanguageMode) ?? 'auto';
+      final languageMode =
+          _prefs.getString(SettingsKeys.appLanguageMode) ?? 'auto';
       if (languageMode == 'auto') {
         final systemLocale = WidgetsBinding.instance.platformDispatcher.locale;
         _danmakuConvertToSimplified =
@@ -71,9 +82,9 @@ class SettingsProvider with ChangeNotifier {
         _danmakuConvertToSimplified = true;
       }
     }
-    _autoMatchDanmakuFirstSearchResultOnHashFail =
-        _prefs.getBool(SettingsKeys.autoMatchDanmakuFirstSearchResultOnHashFail) ??
-            true;
+    _autoMatchDanmakuFirstSearchResultOnHashFail = _prefs.getBool(
+            SettingsKeys.autoMatchDanmakuFirstSearchResultOnHashFail) ??
+        true;
     final savedAutoMatchDanmakuOnPlay =
         _prefs.getBool(SettingsKeys.autoMatchDanmakuOnPlay);
     _autoMatchDanmakuOnPlay = savedAutoMatchDanmakuOnPlay ?? true;
@@ -81,6 +92,8 @@ class SettingsProvider with ChangeNotifier {
       _prefs.getString(SettingsKeys.danmakuAutoLoadStrategy),
       legacyAutoMatchOnPlay: _autoMatchDanmakuOnPlay,
     );
+    _fastPlaybackStartup =
+        _prefs.getBool(SettingsKeys.fastPlaybackStartup) ?? false;
     if (!_prefs.containsKey(SettingsKeys.danmakuAutoLoadStrategy)) {
       await _prefs.setString(
         SettingsKeys.danmakuAutoLoadStrategy,
@@ -91,11 +104,21 @@ class SettingsProvider with ChangeNotifier {
         _prefs.getBool(SettingsKeys.useExternalPlayer) ?? false;
     _externalPlayerPath =
         _prefs.getString(SettingsKeys.externalPlayerPath) ?? '';
-    _githubProxyUrl =
-        _prefs.getString(SettingsKeys.githubProxyUrl) ?? '';
+    _externalPlayerDanmakuOverlay =
+        _prefs.getBool(SettingsKeys.externalPlayerDanmakuOverlay) ?? true;
+    _externalPlayerAutoSwitchToDanmakuConsole =
+        _prefs.getBool(SettingsKeys.externalPlayerAutoSwitchToDanmakuConsole) ??
+            true;
+    _externalPlayerShrinkWindow =
+        _prefs.getBool(SettingsKeys.externalPlayerShrinkWindow) ?? false;
+    _externalPlayerConsoleWindowMode =
+        _prefs.getBool(SettingsKeys.externalPlayerConsoleWindowMode) ?? false;
+    _githubProxyUrl = _prefs.getString(SettingsKeys.githubProxyUrl) ?? '';
     // 弹幕超采样：默认对平板和低 DPR 桌面设备开启 2x
     final defaultSupersample =
-        globals.isTablet || (globals.isDesktop && _defaultDprBelow2()) ? 2.0 : 0.0;
+        globals.isTablet || (globals.isDesktop && _defaultDprBelow2())
+            ? 2.0
+            : 0.0;
     _danmakuSupersample =
         _prefs.getDouble(SettingsKeys.danmakuSupersample) ?? defaultSupersample;
     notifyListeners();
@@ -106,8 +129,8 @@ class SettingsProvider with ChangeNotifier {
   /// 判断当前设备默认 DPR 是否低于 2.0
   static bool _defaultDprBelow2() {
     try {
-      final dpr = WidgetsBinding.instance.platformDispatcher.views.first
-          .devicePixelRatio;
+      final dpr = WidgetsBinding
+          .instance.platformDispatcher.views.first.devicePixelRatio;
       return dpr < 2.0;
     } catch (_) {
       return false;
@@ -134,7 +157,8 @@ class SettingsProvider with ChangeNotifier {
   /// Sets the danmaku convert to simplified Chinese setting.
   Future<void> setDanmakuConvertToSimplified(bool enable) async {
     _danmakuConvertToSimplified = enable;
-    await _prefs.setBool(_danmakuConvertKey, _danmakuConvertToSimplified);
+    await _prefs.setBool(
+        SettingsKeys.danmakuConvertToSimplified, _danmakuConvertToSimplified);
     notifyListeners();
   }
 
@@ -181,6 +205,13 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setFastPlaybackStartup(bool enable) async {
+    if (_fastPlaybackStartup == enable) return;
+    _fastPlaybackStartup = enable;
+    await _prefs.setBool(SettingsKeys.fastPlaybackStartup, enable);
+    notifyListeners();
+  }
+
   Future<void> setUseExternalPlayer(bool enable) async {
     _useExternalPlayer = enable;
     await _prefs.setBool(
@@ -199,6 +230,48 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setExternalPlayerDanmakuOverlay(bool enable) async {
+    if (_externalPlayerDanmakuOverlay == enable) return;
+    _externalPlayerDanmakuOverlay = enable;
+    await _prefs.setBool(
+      SettingsKeys.externalPlayerDanmakuOverlay,
+      _externalPlayerDanmakuOverlay,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setExternalPlayerAutoSwitchToDanmakuConsole(bool enable) async {
+    if (_externalPlayerAutoSwitchToDanmakuConsole == enable) return;
+    _externalPlayerAutoSwitchToDanmakuConsole = enable;
+
+    await _prefs.setBool(
+      SettingsKeys.externalPlayerAutoSwitchToDanmakuConsole,
+      _externalPlayerAutoSwitchToDanmakuConsole,
+    );
+
+    notifyListeners();
+  }
+
+  Future<void> setExternalPlayerShrinkWindow(bool enable) async {
+    if (_externalPlayerShrinkWindow == enable) return;
+    _externalPlayerShrinkWindow = enable;
+    await _prefs.setBool(
+      SettingsKeys.externalPlayerShrinkWindow,
+      _externalPlayerShrinkWindow,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setExternalPlayerConsoleWindowMode(bool enable) async {
+    if (_externalPlayerConsoleWindowMode == enable) return;
+    _externalPlayerConsoleWindowMode = enable;
+    await _prefs.setBool(
+      SettingsKeys.externalPlayerConsoleWindowMode,
+      _externalPlayerConsoleWindowMode,
+    );
+    notifyListeners();
+  }
+
   Future<void> setGithubProxyUrl(String url) async {
     _githubProxyUrl = url.trim();
     await _prefs.setString(
@@ -213,5 +286,4 @@ class SettingsProvider with ChangeNotifier {
     await _prefs.setDouble(SettingsKeys.danmakuSupersample, value);
     notifyListeners();
   }
-
 }

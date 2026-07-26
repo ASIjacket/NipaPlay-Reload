@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:kmbal_ionicons/kmbal_ionicons.dart';
+import 'package:nipaplay/settings/adaptive_settings_widgets.dart';
 import 'package:nipaplay/utils/hotkey_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
-import 'package:nipaplay/themes/nipaplay/widgets/settings_item.dart';
 import 'package:nipaplay/utils/message_helper.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
-import 'dart:ui';
 
 class ShortcutsSettingsPage extends StatefulWidget {
   const ShortcutsSettingsPage({super.key});
@@ -42,6 +40,8 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
     'step_forward': '逐帧前进',
     'step_backward': '逐帧后退',
     'resize_to_video': '窗口适配视频',
+    'toggle_picture_in_picture': '画中画模式',
+    'toggle_detached_player': '独立窗口模式',
   };
 
   // 动作描述
@@ -60,6 +60,8 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
     'step_forward': '暂停后前进一帧',
     'step_backward': '暂停后后退一帧',
     'resize_to_video': '将窗口大小调整为视频原始分辨率',
+    'toggle_picture_in_picture': '进入画中画，或从画中画恢复为普通独立窗口',
+    'toggle_detached_player': '在主窗口与独立播放窗口之间移动播放器',
   };
 
   // 动作图标映射
@@ -78,14 +80,8 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
     'step_forward': Ionicons.chevron_forward_circle_outline,
     'step_backward': Ionicons.chevron_back_circle_outline,
     'resize_to_video': Ionicons.resize_outline,
-  };
-
-  // 修饰键文本映射
-  final Map<HotKeyModifier, String> _modifierTexts = {
-    HotKeyModifier.shift: 'Shift',
-    HotKeyModifier.control: 'Ctrl',
-    HotKeyModifier.alt: 'Alt',
-    HotKeyModifier.meta: 'Meta',
+    'toggle_picture_in_picture': Icons.picture_in_picture_alt_rounded,
+    'toggle_detached_player': Icons.open_in_new_rounded,
   };
 
   @override
@@ -143,6 +139,8 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
       'step_forward': 'E',
       'step_backward': 'Q',
       'resize_to_video': 'R',
+      'toggle_picture_in_picture': 'P',
+      'toggle_detached_player': 'W',
     };
 
     for (final entry in defaultShortcuts.entries) {
@@ -301,8 +299,8 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
   }
 
   // 处理键盘事件
-  void _handleKeyPress(RawKeyEvent event) {
-    if (_recordingAction == null || event is! RawKeyDownEvent) return;
+  void _handleKeyPress(KeyEvent event) {
+    if (_recordingAction == null || event is! KeyDownEvent) return;
 
     debugPrint(
         '[ShortcutsSettingsPage] 接收到键盘事件: ${event.physicalKey}, debugName: ${event.physicalKey.debugName}');
@@ -337,10 +335,11 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
 
     // 构建修饰键列表
     List<String> modifiers = [];
-    if (event.isShiftPressed) modifiers.add('Shift');
-    if (event.isControlPressed) modifiers.add('Ctrl');
-    if (event.isAltPressed) modifiers.add('Alt');
-    if (event.isMetaPressed) modifiers.add('Meta');
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isShiftPressed) modifiers.add('Shift');
+    if (keyboard.isControlPressed) modifiers.add('Ctrl');
+    if (keyboard.isAltPressed) modifiers.add('Alt');
+    if (keyboard.isMetaPressed) modifiers.add('Meta');
 
     // 构建快捷键文本
     String shortcut = '';
@@ -377,8 +376,7 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
               _stopRecording();
             },
             child: const Text('取消',
-                locale: Locale("zh", "CN"),
-                style: TextStyle(color: Colors.white70)),
+                locale: Locale("zh", "CN")),
           ),
           HoverScaleTextButton(
             onPressed: () {
@@ -387,8 +385,7 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
               _stopRecording();
             },
             child: const Text('替换',
-                locale: Locale("zh", "CN"),
-                style: TextStyle(color: Colors.white)),
+                locale: Locale("zh", "CN")),
           ),
         ],
       );
@@ -401,138 +398,43 @@ class _ShortcutsSettingsPageState extends State<ShortcutsSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return RawKeyboardListener(
+    return KeyboardListener(
       focusNode: FocusNode()..requestFocus(),
-      onKey: _handleKeyPress,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: _shortcuts == null
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                children: [
-                  // 恢复默认按钮作为单独的一栏
-                  SettingsItem.button(
-                    title: "恢复默认快捷键",
-                    subtitle: "将所有快捷键恢复为默认设置",
-                    icon: Ionicons.refresh_outline,
-                    trailingIcon: Ionicons.refresh_outline,
-                    onTap: _resetToDefaults,
-                  ),
-                  const Divider(color: Colors.white12, height: 1),
-
-                  // 快捷键列表
-                  ..._actionLabels.keys.map((action) {
-                    final label = _actionLabels[action]!;
-                    final description = _actionDescriptions[action] ?? '';
-                    final shortcut = _shortcuts![action] ?? '';
-                    final isRecording = _recordingAction == action;
-
-                    return Column(
-                      children: [
-                        SettingsItem.hotkey(
-                          title: label,
-                          subtitle: description,
-                          icon: _getActionIcon(action),
-                          hotkeyText: shortcut,
-                          isRecording: isRecording,
-                          onTap: () => _startRecording(action),
-                        ),
-                        const Divider(color: Colors.white12, height: 1),
-                      ],
-                    );
-                  }),
-                ],
-              ),
-      ),
-    );
-  }
-
-  // 构建录制中的按钮
-  Widget _buildRecordingButton() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.red.withOpacity(0.6), width: 1),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: const BoxDecoration(
-              color: Colors.red,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            '按下键位...',
-            locale: Locale("zh", "CN"),
-            style: TextStyle(color: Colors.white),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // 构建快捷键按钮，使用与BlurButton一致的样式
-  Widget _buildShortcutButton(String shortcut, VoidCallback onPressed) {
-    bool isHovered = false;
-
-    return StatefulBuilder(builder: (context, setState) {
-      return MouseRegion(
-        onEnter: (_) => setState(() => isHovered = true),
-        onExit: (_) => setState(() => isHovered = false),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOutCubic,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: isHovered
-                    ? Colors.white.withOpacity(0.4)
-                    : Colors.white.withOpacity(0.18),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isHovered
-                      ? Colors.white.withOpacity(0.7)
-                      : Colors.white.withOpacity(0.25),
-                  width: isHovered ? 1.0 : 0.5,
+      onKeyEvent: _handleKeyPress,
+      child: _shortcuts == null
+          ? AdaptiveSettingsPage(
+              children: const [
+                Center(child: CircularProgressIndicator()),
+              ],
+            )
+          : AdaptiveSettingsPage(
+              children: [
+                AdaptiveSettingsSection(
+                  addDividers: false,
+                  children: [
+                    AdaptiveSettingsTile<void>.card(
+                      title: "恢复默认快捷键",
+                      subtitle: "将所有快捷键恢复为默认设置",
+                      icon: Ionicons.refresh_outline,
+                      trailingIcon: Ionicons.refresh_outline,
+                      onTap: _resetToDefaults,
+                    ),
+                    const Divider(color: Colors.white12, height: 1),
+                    for (final action in _actionLabels.keys) ...[
+                      AdaptiveSettingsTile<void>.hotkey(
+                        title: _actionLabels[action]!,
+                        subtitle: _actionDescriptions[action] ?? '',
+                        icon: _getActionIcon(action),
+                        hotkeyText: _shortcuts![action] ?? '',
+                        isRecording: _recordingAction == action,
+                        onTap: () => _startRecording(action),
+                      ),
+                      const Divider(color: Colors.white12, height: 1),
+                    ],
+                  ],
                 ),
-                boxShadow: isHovered
-                    ? [
-                        BoxShadow(
-                          color: Colors.white.withOpacity(0.25),
-                          blurRadius: 10,
-                          spreadRadius: 1,
-                        )
-                      ]
-                    : [],
-              ),
-              child: InkWell(
-                onTap: onPressed,
-                child: AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 300),
-                  style: TextStyle(
-                    color: isHovered
-                        ? Colors.white
-                        : Colors.white.withOpacity(0.8),
-                    fontSize: 14,
-                    fontWeight: isHovered ? FontWeight.w500 : FontWeight.normal,
-                  ),
-                  child: Text(shortcut.isEmpty ? '点击设置' : shortcut),
-                ),
-              ),
+              ],
             ),
-          ),
-        ),
-      );
-    });
+    );
   }
 }

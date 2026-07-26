@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cmath>
 #include <cstdint>
+#include <cwchar>
 #include <future>
 #include <iostream>
 #include <iterator>
@@ -22,16 +23,245 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <variant>
 
+#include <commctrl.h>
 #include <windowsx.h>
 
 namespace {
 
 constexpr char kChannelName[] = "nipaplay/windows_native_video";
+constexpr char kDesktopWindowChannelName[] =
+    "nipaplay/desktop_multi_window_host";
 constexpr int64_t kWindowHostedVideoSurfaceId = -1;
 constexpr wchar_t kOverlayWindowClassName[] =
     L"NipaPlayWindowsNativeVideoOverlay";
+constexpr wchar_t kFlutterRegularHostWindowClassName[] =
+    L"FLUTTER_HOST_WINDOW";
+constexpr wchar_t kFlutterViewWindowClassName[] = L"FLUTTERVIEW";
+
+struct FlutterRegularHostSearch {
+  DWORD process_id = 0;
+  HWND result = nullptr;
+};
+
+BOOL CALLBACK FindFlutterRegularHostWindow(HWND window, LPARAM parameter) {
+  auto* search = reinterpret_cast<FlutterRegularHostSearch*>(parameter);
+  DWORD process_id = 0;
+  ::GetWindowThreadProcessId(window, &process_id);
+  if (process_id != search->process_id) {
+    return TRUE;
+  }
+
+  wchar_t class_name[64] = {};
+  if (::GetClassNameW(window, class_name, 64) == 0 ||
+      std::wcscmp(class_name, kFlutterRegularHostWindowClassName) != 0) {
+    return TRUE;
+  }
+  search->result = window;
+  return FALSE;
+}
+
+HWND ResolveFlutterRegularHostWindow() {
+  FlutterRegularHostSearch search{::GetCurrentProcessId(), nullptr};
+  ::EnumWindows(FindFlutterRegularHostWindow,
+                reinterpret_cast<LPARAM>(&search));
+  return search.result;
+}
+
+constexpr UINT_PTR kDetachedWindowSubclassId = 706;
+std::unordered_map<HWND, double> g_detached_window_aspect_ratios;
+std::unordered_map<HWND, RECT> g_picture_in_picture_restore_bounds;
+
+LRESULT CALLBACK DetachedWindowSubclassProc(HWND window,
+                                            UINT message,
+                                            WPARAM wparam,
+                                            LPARAM lparam,
+                                            UINT_PTR,
+                                            DWORD_PTR) {
+  if (message == WM_NCDESTROY) {
+    g_detached_window_aspect_ratios.erase(window);
+    g_picture_in_picture_restore_bounds.erase(window);
+    ::RemoveWindowSubclass(window, DetachedWindowSubclassProc,
+                           kDetachedWindowSubclassId);
+    return ::DefSubclassProc(window, message, wparam, lparam);
+  }
+  if (message != WM_SIZING || lparam == 0) {
+    return ::DefSubclassProc(window, message, wparam, lparam);
+  }
+
+  const auto ratio_it = g_detached_window_aspect_ratios.find(window);
+  if (ratio_it == g_detached_window_aspect_ratios.end() ||
+      ratio_it->second <= 0.0) {
+    return ::DefSubclassProc(window, message, wparam, lparam);
+  }
+
+  auto* sizing_rect = reinterpret_cast<RECT*>(lparam);
+  RECT current_window = {};
+  RECT current_client = {};
+  ::GetWindowRect(window, &current_window);
+  ::GetClientRect(window, &current_client);
+  const int frame_width =
+      (current_window.right - current_window.left) - current_client.right;
+  const int frame_height =
+      (current_window.bottom - current_window.top) - current_client.bottom;
+  const int proposed_width = sizing_rect->right - sizing_rect->left;
+  const int proposed_height = sizing_rect->bottom - sizing_rect->top;
+  const double ratio = ratio_it->second;
+
+  const bool size_from_height =
+      wparam == WMSZ_TOP || wparam == WMSZ_BOTTOM;
+  if (size_from_height) {
+    const int client_height = std::max(1, proposed_height - frame_height);
+    const int target_width =
+        static_cast<int>(std::lround(client_height * ratio)) + frame_width;
+    sizing_rect->right = sizing_rect->left + target_width;
+  } else {
+    const int client_width = std::max(1, proposed_width - frame_width);
+    const int target_height =
+        static_cast<int>(std::lround(client_width / ratio)) + frame_height;
+    if (wparam == WMSZ_TOPLEFT || wparam == WMSZ_TOPRIGHT) {
+      sizing_rect->top = sizing_rect->bottom - target_height;
+    } else {
+      sizing_rect->bottom = sizing_rect->top + target_height;
+    }
+  }
+  return TRUE;
+}
+
+void SetDetachedWindowAspectRatio(HWND window, double ratio) {
+  if (ratio <= 0.0 || !std::isfinite(ratio)) {
+    g_detached_window_aspect_ratios.erase(window);
+    ::RemoveWindowSubclass(window, DetachedWindowSubclassProc,
+                           kDetachedWindowSubclassId);
+    return;
+  }
+  g_detached_window_aspect_ratios[window] = ratio;
+  ::SetWindowSubclass(window, DetachedWindowSubclassProc,
+                      kDetachedWindowSubclassId, 0);
+}
+
+void MakeDetachedWindowFrameless(HWND window) {
+  LONG_PTR style = ::GetWindowLongPtrW(window, GWL_STYLE);
+  style &= ~WS_CAPTION;
+  style |= WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+  ::SetWindowLongPtrW(window, GWL_STYLE, style);
+  ::SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
+}
+
+void SetDetachedWindowClientSize(HWND window, double logical_width,
+                                 double logical_height) {
+  if (logical_width <= 0.0 || logical_height <= 0.0) {
+    return;
+  }
+  const UINT dpi = ::GetDpiForWindow(window);
+  const double scale = dpi > 0 ? static_cast<double>(dpi) / 96.0 : 1.0;
+  RECT bounds = {
+      0, 0, static_cast<LONG>(std::lround(logical_width * scale)),
+      static_cast<LONG>(std::lround(logical_height * scale))};
+  const DWORD style = static_cast<DWORD>(::GetWindowLongPtrW(window, GWL_STYLE));
+  const DWORD ex_style =
+      static_cast<DWORD>(::GetWindowLongPtrW(window, GWL_EXSTYLE));
+  ::AdjustWindowRectExForDpi(&bounds, style, FALSE, ex_style, dpi);
+  ::SetWindowPos(window, nullptr, 0, 0, bounds.right - bounds.left,
+                 bounds.bottom - bounds.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+double ReadDouble(const flutter::EncodableMap& args,
+                  const char* key,
+                  double fallback);
+bool ReadBool(const flutter::EncodableMap& args,
+              const char* key,
+              bool fallback);
+
+std::string ReadString(const flutter::EncodableMap& args,
+                       const char* key,
+                       const std::string& fallback = "") {
+  const auto it = args.find(flutter::EncodableValue(key));
+  if (it == args.end()) {
+    return fallback;
+  }
+  if (const auto* value = std::get_if<std::string>(&it->second)) {
+    return *value;
+  }
+  return fallback;
+}
+
+void SetDetachedWindowPictureInPicture(
+    HWND window,
+    const flutter::EncodableMap& args) {
+  const bool enabled = ReadBool(args, "enabled", false);
+  if (!enabled) {
+    const auto restore_it = g_picture_in_picture_restore_bounds.find(window);
+    if (restore_it == g_picture_in_picture_restore_bounds.end()) {
+      return;
+    }
+    const RECT restore = restore_it->second;
+    g_picture_in_picture_restore_bounds.erase(restore_it);
+    ::SetWindowPos(window, nullptr, restore.left, restore.top,
+                   restore.right - restore.left, restore.bottom - restore.top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+    return;
+  }
+
+  if (g_picture_in_picture_restore_bounds.find(window) ==
+      g_picture_in_picture_restore_bounds.end()) {
+    RECT current = {};
+    if (::GetWindowRect(window, &current)) {
+      g_picture_in_picture_restore_bounds[window] = current;
+    }
+  }
+
+  const HMONITOR monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (monitor == nullptr || !::GetMonitorInfoW(monitor, &monitor_info)) {
+    return;
+  }
+  const RECT work = monitor_info.rcWork;
+  const double work_width = static_cast<double>(work.right - work.left);
+  const double work_height = static_cast<double>(work.bottom - work.top);
+  const double ratio = std::clamp(ReadDouble(args, "aspectRatio", 16.0 / 9.0),
+                                  0.5, 3.0);
+  const UINT dpi = ::GetDpiForWindow(window);
+  const double scale = dpi > 0 ? static_cast<double>(dpi) / 96.0 : 1.0;
+  const double margin = std::max(0.0, ReadDouble(args, "margin", 16.0) * scale);
+  const double available_width = std::max(1.0, work_width - margin * 2.0);
+  double client_height = std::min(work_height / 3.0,
+                                  std::max(1.0, work_height - margin * 2.0));
+  double client_width = client_height * ratio;
+  if (client_width > available_width) {
+    client_width = available_width;
+    client_height = client_width / ratio;
+  }
+  SetDetachedWindowClientSize(window, client_width / scale,
+                              client_height / scale);
+
+  RECT resized = {};
+  if (!::GetWindowRect(window, &resized)) {
+    return;
+  }
+  const int window_width = resized.right - resized.left;
+  const int window_height = resized.bottom - resized.top;
+  const std::string placement = ReadString(args, "placement", "topRight");
+  const int left = work.left + static_cast<int>(std::lround(margin));
+  const int right =
+      work.right - window_width - static_cast<int>(std::lround(margin));
+  const int top = work.top + static_cast<int>(std::lround(margin));
+  const int bottom =
+      work.bottom - window_height - static_cast<int>(std::lround(margin));
+  const bool place_left =
+      placement == "topLeft" || placement == "bottomLeft";
+  const bool place_bottom =
+      placement == "bottomLeft" || placement == "bottomRight";
+  ::SetWindowPos(window, nullptr, place_left ? left : right,
+                 place_bottom ? bottom : top, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
 constexpr UINT kRenderMessage = WM_APP + 0x4E56;
 
 std::optional<int64_t> ToInt64(const flutter::EncodableValue& value) {
@@ -787,7 +1017,10 @@ WindowsNativeVideoPlugin::WindowsNativeVideoPlugin(
     HWND host_window,
     HWND flutter_view,
     flutter::BinaryMessenger* messenger)
-    : host_window_(host_window), flutter_view_(flutter_view) {
+    : host_window_(host_window),
+      flutter_view_(flutter_view),
+      main_host_window_(host_window),
+      main_flutter_view_(flutter_view) {
   LogNativeVideo("plugin created host=" + std::to_string(HwndToInt64(host_window_)) +
                  " flutterView=" + std::to_string(HwndToInt64(flutter_view_)));
   if (!HasTransparentWindowBackgroundOverride()) {
@@ -801,6 +1034,14 @@ WindowsNativeVideoPlugin::WindowsNativeVideoPlugin(
   channel_->SetMethodCallHandler([this](const auto& call, auto result) {
     HandleMethodCall(call, std::move(result));
   });
+  desktop_window_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          messenger, kDesktopWindowChannelName,
+          &flutter::StandardMethodCodec::GetInstance());
+  desktop_window_channel_->SetMethodCallHandler(
+      [this](const auto& call, auto result) {
+        HandleDesktopWindowMethodCall(call, std::move(result));
+      });
 }
 
 WindowsNativeVideoPlugin::~WindowsNativeVideoPlugin() {
@@ -944,6 +1185,75 @@ void WindowsNativeVideoPlugin::HandleMethodCall(
   result->NotImplemented();
 }
 
+void WindowsNativeVideoPlugin::HandleDesktopWindowMethodCall(
+    const flutter::MethodCall<flutter::EncodableValue>& method_call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  const auto* args =
+      method_call.arguments()
+          ? std::get_if<flutter::EncodableMap>(method_call.arguments())
+          : nullptr;
+  if (!args) {
+    result->Error("INVALID_ARGUMENTS", "Arguments are required");
+    return;
+  }
+  HWND window = ResolveFlutterRegularHostWindow();
+  if (window == nullptr) {
+    result->Error("WINDOW_NOT_FOUND",
+                  "No same-engine Flutter secondary window is available");
+    return;
+  }
+
+  const auto& method = method_call.method_name();
+  if (method == "configureWindow") {
+    if (ReadBool(*args, "frameless")) {
+      MakeDetachedWindowFrameless(window);
+    }
+    SetDetachedWindowAspectRatio(window, ReadDouble(*args, "aspectRatio"));
+    SetDetachedWindowClientSize(window, ReadDouble(*args, "width"),
+                                ReadDouble(*args, "height"));
+    const bool always_on_top = ReadBool(*args, "alwaysOnTop");
+    ::SetWindowPos(window, always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
+                   0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    result->Success(flutter::EncodableValue(always_on_top));
+    return;
+  }
+  if (method == "setAspectRatio") {
+    SetDetachedWindowAspectRatio(window, ReadDouble(*args, "aspectRatio"));
+    result->Success();
+    return;
+  }
+  if (method == "setAlwaysOnTop") {
+    const bool always_on_top = ReadBool(*args, "alwaysOnTop");
+    ::SetWindowPos(window, always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
+                   0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    result->Success(flutter::EncodableValue(always_on_top));
+    return;
+  }
+  if (method == "setPictureInPictureMode") {
+    const bool enabled = ReadBool(*args, "enabled");
+    const std::string placement =
+        ReadString(*args, "placement", "topRight");
+    SetDetachedWindowPictureInPicture(window, *args);
+    LogNativeVideo(
+        "picture-in-picture enabled=" + std::to_string(enabled ? 1 : 0) +
+        " placement=" + placement +
+        " aspect=" + std::to_string(ReadDouble(*args, "aspectRatio")));
+    result->Success();
+    return;
+  }
+  if (method == "startDragging") {
+    ::ReleaseCapture();
+    ::SendMessageW(window, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+    result->Success();
+    return;
+  }
+  if (method == "updateDragging" || method == "endDragging") {
+    result->Success();
+    return;
+  }
+  result->NotImplemented();
+}
+
 HWND WindowsNativeVideoPlugin::EnsureOverlayWindow() {
   if (overlay_window_ != nullptr) {
     return overlay_window_;
@@ -1017,6 +1327,9 @@ void WindowsNativeVideoPlugin::HideOverlayWindow(bool reset_generation) {
 
 void WindowsNativeVideoPlugin::UpdateOverlayFrame(
     const flutter::EncodableMap& args) {
+  if (const auto flutter_view_id = ReadInt64(args, "flutterViewId")) {
+    UpdateHostWindowForFlutterView(flutter_view_id.value());
+  }
   const bool visible = ReadBool(args, "visible", true);
   const auto generation = ReadInt64(args, "generation");
   if (!visible && generation.has_value() &&
@@ -1062,6 +1375,39 @@ void WindowsNativeVideoPlugin::UpdateOverlayFrame(
   overlay_frame_logical_height_ = height;
 
   SyncOverlayWindowToHost(!was_visible || generation_changed);
+}
+
+void WindowsNativeVideoPlugin::UpdateHostWindowForFlutterView(
+    int64_t flutter_view_id) {
+  HWND next_host = main_host_window_;
+  HWND next_flutter_view = main_flutter_view_;
+  if (flutter_view_id != 0) {
+    next_host = ResolveFlutterRegularHostWindow();
+    if (next_host == nullptr) {
+      return;
+    }
+    next_flutter_view = ::FindWindowExW(
+        next_host, nullptr, kFlutterViewWindowClassName, nullptr);
+  }
+
+  const bool next_host_active = ::GetForegroundWindow() == next_host;
+  if (host_window_ == next_host) {
+    host_window_active_ = next_host_active;
+    active_flutter_view_id_ = flutter_view_id;
+    return;
+  }
+
+  HideOverlayWindow(false);
+  host_window_ = next_host;
+  flutter_view_ = next_flutter_view;
+  active_flutter_view_id_ = flutter_view_id;
+  host_window_active_ = next_host_active;
+  host_transparent_background_enabled_ = false;
+  overlay_physical_rect_valid_ = false;
+  LogNativeVideo("moved native video host to flutterViewId=" +
+                 std::to_string(flutter_view_id) + " host=" +
+                 std::to_string(HwndToInt64(host_window_)) + " flutterView=" +
+                 std::to_string(HwndToInt64(flutter_view_)));
 }
 
 void WindowsNativeVideoPlugin::SyncOverlayWindowToHost(bool force_log) {

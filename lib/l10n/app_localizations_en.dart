@@ -27,6 +27,207 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tabAccount => 'Account';
 
   @override
+  String get tabDanmakuConsole => 'Danmaku Console';
+
+  @override
+  String get externalPlayerConsoleTitle => 'External Player Danmaku Console';
+
+  @override
+  String get externalPlayerConsoleEmptyTitle => 'No external player is running';
+
+  @override
+  String get externalPlayerConsoleEmptyDescription =>
+      'Start playback with an external player to see its session and controls here.';
+
+  @override
+  String get externalPlayerConsoleAnime => 'Anime';
+
+  @override
+  String get externalPlayerConsoleEpisode => 'Episode';
+
+  @override
+  String get externalPlayerConsoleEpisodeId => 'Episode ID';
+
+  @override
+  String get externalPlayerConsoleProcessId => 'Player PID';
+
+  @override
+  String get externalPlayerConsoleMediaPath => 'Media path';
+
+  @override
+  String get externalPlayerConsoleUnknownAnime => 'Unknown anime';
+
+  @override
+  String get externalPlayerConsoleUnknownEpisode => 'Unknown episode';
+
+  @override
+  String get externalPlayerConsoleProgress => 'Playback progress';
+
+  @override
+  String get externalPlayerConsoleProgressUnsupported =>
+      'This player does not support progress synchronization.';
+
+  @override
+  String get externalPlayerConsoleProgressLoading =>
+      'Reading playback progress…';
+
+  @override
+  String get externalPlayerConsoleTimestampLabel => 'Exact timestamp';
+
+  @override
+  String get externalPlayerConsoleTimestampHint => 'HH:MM:SS / MM:SS / seconds';
+
+  @override
+  String get externalPlayerConsoleTimestampInvalid => 'Enter a valid timestamp';
+
+  @override
+  String get externalPlayerConsoleTimestampSeek => 'Jump';
+
+  @override
+  String get externalPlayerConsoleDanmakuList => 'Danmaku list';
+
+  @override
+  String externalPlayerConsoleDanmakuStats(int total, int active) {
+    return '$total total · $active on screen';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuEmpty =>
+      'No danmaku was loaded for this playback session.';
+
+  @override
+  String get externalPlayerConsoleDanmakuUnknownSender => 'Unknown';
+
+  @override
+  String get externalPlayerConsoleDanmakuSender => 'Sender';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeScroll => 'Scroll';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeTop => 'Top';
+
+  @override
+  String get externalPlayerConsoleDanmakuTypeBottom => 'Bottom';
+
+  @override
+  String get externalPlayerConsoleDanmakuActive => 'On screen';
+
+  @override
+  String get externalPlayerConsoleDanmakuFollowEnabled => 'Following playback';
+
+  @override
+  String get externalPlayerConsoleDanmakuFollowDisabled => 'Auto-follow paused';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordFilter => 'Danmaku block rules';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordHint => 'Enter rule content';
+
+  @override
+  String get externalPlayerConsoleDanmakuKeywordAdd => 'Add';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlocked => 'Blocked';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeKeyword => 'Keyword';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeRegex => 'Regular expression';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockModeSender => 'Sender ID';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockInvalid =>
+      'Enter a valid, non-duplicate rule';
+
+  @override
+  String get externalPlayerConsoleDanmakuBlockRemove => 'Remove rule';
+
+  @override
+  String get externalPlayerConsoleDanmakuShow => 'Show danmaku';
+
+  @override
+  String get externalPlayerConsoleDanmakuHide => 'Hide danmaku';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetTitle => 'Danmaku timing offset';
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetAdvance(String seconds) {
+    return 'Show ${seconds}s earlier';
+  }
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetDelay(String seconds) {
+    return 'Show ${seconds}s later';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetReset => 'Reset';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCustomLabel =>
+      'Custom offset in seconds';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCustomHint =>
+      'Negative is earlier, positive is later';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetInvalid =>
+      'Enter a valid number of seconds';
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetApply => 'Apply';
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetCurrentAdvance(String seconds) {
+    return 'Danmaku currently appears ${seconds}s earlier';
+  }
+
+  @override
+  String externalPlayerConsoleDanmakuOffsetCurrentDelay(String seconds) {
+    return 'Danmaku currently appears ${seconds}s later';
+  }
+
+  @override
+  String get externalPlayerConsoleDanmakuOffsetCurrentNone =>
+      'Current danmaku offset is 0s';
+
+  @override
+  String get danmakuOpacityTitle => 'Danmaku opacity';
+
+  @override
+  String get danmakuFontSizeTitle => 'Danmaku font size';
+
+  @override
+  String get danmakuOpacitySubtitle =>
+      'Adjust danmaku text opacity. Newly opened videos will use this setting.';
+
+  @override
+  String get danmakuOutlineEnabledTitle => 'Enable danmaku outline';
+
+  @override
+  String get danmakuOutlineEnabledSubtitle =>
+      '0 disables the outline, 1 uses a thin outline, and 2 restores the original thick outline. Newly opened videos use this setting.';
+
+  @override
+  String get danmakuOutlineWidthTitle => 'Danmaku outline thickness';
+
+  @override
+  String get externalPlayerConsoleResume => 'Resume';
+
+  @override
+  String get externalPlayerConsolePause => 'Pause';
+
+  @override
+  String get externalPlayerConsoleClose => 'Close Player';
+
+  @override
   String get tabSettings => 'Settings';
 
   @override
@@ -1779,6 +1980,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get appreciationCode => 'Tip Jar';
+
+  @override
+  String get appreciationCodeHint => 'Tap to view the tip jar';
 
   @override
   String get appreciationImageLoadFailed => 'Failed to load tip jar image';

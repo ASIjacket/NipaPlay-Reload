@@ -5,7 +5,7 @@ import 'package:nipaplay/danmaku_next/next2_emoji_pipeline.dart';
 import 'package:nipaplay/danmaku_next/next2_overlay_viewport.dart';
 import 'package:nipaplay/danmaku_next/next2_texture_bridge.dart';
 import 'package:nipaplay/providers/settings_provider.dart';
-import 'package:nipaplay/utils/video_player_state.dart';
+import 'package:nipaplay/utils/danmaku/style.dart';
 import 'package:provider/provider.dart';
 
 import 'dfm_plus_layout_bridge.dart';
@@ -144,8 +144,15 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
   /// latency from distorting the frame interval measurement.
   int _vsyncWallUs = 0;
 
-  /// Continuous media time used for layout. Advances by real wall-clock dt and
-  /// is gently corrected toward playbackTimeMs during normal playback.
+  /// Continuous media time used for layout. Advances by real wall-clock dt at
+  /// EXACTLY playbackRate — monotonic non-decreasing between snaps, never
+  /// modulated, so danmaku on-screen speed is always consistent and matches the
+  /// decoder (which always plays at playbackRate). The authoritative media
+  /// clock (playbackTimeMs) is used only to snap on seeks/loops — NOT to pace
+  /// the display clock, because the upstream progressively corrects
+  /// playbackTimeMs toward the decoder (slowing/freezing it after a
+  /// seek/buffer), and following or yanking back to that held clock caused the
+  /// "creep slowly" and "scroll-to-middle-then-snap-back" (twitch) symptoms.
   double _displayMediaTime = 0.0;
 
   /// Wall-clock microseconds of the previous display-time update.
@@ -154,20 +161,48 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
   /// Whether _displayMediaTime has been initialized from playbackTimeMs.
   bool _displayTimeInitialized = false;
 
+  /// Last observed media-clock value (seconds). Used to detect actual mediaTime
+  /// *jumps* (seek / loop / backward seek) as opposed to mere drift, so the
+  /// backward snap only fires on a real backward jump — never on accumulated
+  /// backward drift, which is just the display clock pacing the decoder while
+  /// the media clock is held during an upstream correction.
+  double _lastMediaTimeSec = double.nan;
+
   /// Per-frame wall dt cap. Prevents a long app stall/backgrounding event from
   /// jumping danmaku far ahead; playbackTimeMs will snap/correct us afterward.
   static const double _maxFrameDtSec = 0.2;
 
-  /// Normal playback drift below this is ignored to preserve perfectly smooth
-  /// wall-clock motion between coarse media-clock ticks.
-  static const double _driftCorrectionThresholdSec = 0.080;
+  /// Drift / mediaTime-jump threshold for a one-shot position snap. Because
+  /// layout is a pure function of time (x = width - speed * (t - item.time)),
+  /// a snap is a single-frame horizontal shift of on-screen danmaku while the
+  /// per-frame advance rate — the visible speed — stays exactly playbackRate.
+  /// Forward snaps fire on drift (displayTime fell behind mediaTime = seek);
+  /// backward snaps fire only on a mediaTime backward *jump* (loop / backward
+  /// seek), never on accumulated backward drift. Below this, drift is ignored
+  /// (smooth per-vsync motion).
+  static const double _snapThresholdSec = 0.15;
 
-  /// Drift correction rate once the threshold is exceeded. Small enough to be
-  /// visually smooth, large enough to converge without a long slow/fast period.
-  static const double _driftCorrectionRate = 0.15;
-
-  /// Treat very large drift as seek / loop / stale clock and snap to media time.
+  /// Large seek/loop threshold: a snap of this magnitude also resets the
+  /// wall-clock baseline (the overlay may not have ticked during the seek).
   static const double _hardResyncThresholdSec = 1.0;
+
+  /// Lookahead window (seconds) for rolling glyph prefetch - danmaku entering
+  /// the screen within this window have their chars async-rasterized so they
+  /// hit the atlas before display. 3s balances worker throughput vs coverage.
+  static const double _prefetchLookaheadSec = 3.0;
+
+  /// First-frame prefetch window after configure. Kept equal to the rolling
+  /// window (3s) - a larger first-frame window (e.g. 15s) caused a long
+  /// first-frame stall because all those chars hit the synchronous fallback
+  /// before workers finished. 3s covers the on-screen burst; the rolling 3s
+  /// lookahead picks up the rest. Combined with the ensureTexture-time early
+  /// prefetch (isInitialPrefetch in _tryUpdateTexture), workers get a head
+  /// start before the first draw.
+  static const double _initialPrefetchLookaheadSec = 3.0;
+
+  /// Whether the initial large-window prefetch has been done since the last
+  /// configure. Reset to false when configure runs.
+  bool _initialPrefetchDone = false;
 
   // ── Submit-rate throttle (P1-4) ──
   // On high-refresh panels (>60Hz) the Dart layout+setFrame pipeline is
@@ -279,8 +314,10 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
   /// wall-clock baseline. Used for first frame, seek, resume, and clock source
   /// changes. This is a hard reset, not the normal playback correction path.
   void _resetDisplayTimeToMedia() {
-    _displayMediaTime = widget.playbackTimeMs.value / 1000.0;
+    final mediaTime = widget.playbackTimeMs.value / 1000.0;
+    _displayMediaTime = mediaTime;
     _lastDisplayWallUs = _wallClock.elapsedMicroseconds;
+    _lastMediaTimeSec = mediaTime;
     _displayTimeInitialized = true;
   }
 
@@ -449,12 +486,17 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
         if (!_displayTimeInitialized) {
           _displayMediaTime = mediaTime;
           _lastDisplayWallUs = currentWallUs;
+          _lastMediaTimeSec = mediaTime;
           _displayTimeInitialized = true;
         }
 
-        // Advance by real wall-clock frame time. This is what gives 120Hz
-        // panels 120 distinct positions instead of re-anchoring to a coarser
-        // playbackTimeMs tick and making motion look sticky/60Hz-like.
+        // Advance at EXACTLY playbackRate — monotonic non-decreasing, never
+        // modulated. This is the decoder's rate, so danmaku stay aligned with
+        // the actual video frame even while the upstream is progressively
+        // correcting playbackTimeMs (slowing / freezing it toward the
+        // decoder). Because the display clock paces the decoder, any drift
+        // accumulated while the media clock is held returns to 0 on its own
+        // when the decoder catches up — no backward correction needed.
         if (widget.isPlaying && currentWallUs > _lastDisplayWallUs) {
           final deltaUs = currentWallUs - _lastDisplayWallUs;
           final dt = (deltaUs / 1000000.0).clamp(0.0, _maxFrameDtSec);
@@ -462,16 +504,36 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
         }
         _lastDisplayWallUs = currentWallUs;
 
-        // Correct against the authoritative media clock only when needed.
-        // Small drift is ignored to preserve smooth per-vsync motion; larger
-        // drift is corrected gently; seek/loop-sized drift snaps immediately.
+        // ── Snaps: one-shot position jumps, never rate modulation ──
+        // A snap is a single-frame position jump; the per-frame advance rate
+        // (the visible speed) stays at playbackRate.
+        //
+        // Forward snap on DRIFT: displayTime fell behind mediaTime (seek /
+        // scrub forward). Drift-based is correct here because forward drift
+        // only grows when mediaTime genuinely moved ahead.
+        //
+        // Backward snap on mediaTime JUMP (not drift): a real backward jump
+        // (loop restart / backward seek). Backward drift is NOT snapped — it
+        // accumulates when the display clock paces the decoder while mediaTime
+        // is held during an upstream correction, and yanking it back repeatedly
+        // was the "scroll to middle, jump back to right edge" twitch. Letting
+        // it resolve on its own (decoder catches up) keeps displayMediaTime
+        // monotonic between snaps.
         final drift = mediaTime - _displayMediaTime;
-        if (drift.abs() >= _hardResyncThresholdSec) {
+        if (drift > _snapThresholdSec) {
           _displayMediaTime = mediaTime;
-          _lastDisplayWallUs = currentWallUs;
-        } else if (drift.abs() > _driftCorrectionThresholdSec) {
-          _displayMediaTime += drift * _driftCorrectionRate;
+          if (drift >= _hardResyncThresholdSec) {
+            _lastDisplayWallUs = currentWallUs;
+          }
         }
+        final double mediaDelta = mediaTime - _lastMediaTimeSec;
+        if (mediaDelta < -_snapThresholdSec) {
+          _displayMediaTime = mediaTime;
+          if (mediaDelta <= -_hardResyncThresholdSec) {
+            _lastDisplayWallUs = currentWallUs;
+          }
+        }
+        _lastMediaTimeSec = mediaTime;
 
         final double interpolatedTime = _displayMediaTime + widget.timeOffset;
 
@@ -502,6 +564,8 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
           // Reset after configure so motion resumes from the current media time
           // with a fresh wall-clock baseline.
           _resetDisplayTimeToMedia();
+          // Re-arm the initial large-window prefetch for the new content.
+          _initialPrefetchDone = false;
         }
 
         // ── Submit-rate throttle (P1-4) ──
@@ -527,7 +591,24 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
         // drains its mpsc queue and always renders the latest submission.
         final frame = _bridge.layout(interpolatedTime);
 
-        await _tryUpdateTexture(frame);
+        // Lookahead prefetch: dispatch chars from danmaku entering the screen
+        // in the next few seconds to the Rust MSDF workers (async), so glyphs
+        // are ready in the atlas before display. First frame after configure
+        // uses a large window to pre-warm the opening minute (OP/character
+        // names); subsequent frames send only the small rolling delta.
+        final bool isInitialPrefetch = !_initialPrefetchDone;
+        final double prefetchLookahead = isInitialPrefetch
+            ? _initialPrefetchLookaheadSec
+            : _prefetchLookaheadSec;
+        final String? prefetchChars =
+            _bridge.prefetchChars(_displayMediaTime, prefetchLookahead);
+
+        await _tryUpdateTexture(
+          frame,
+          prefetchChars: prefetchChars,
+          isInitialPrefetch: isInitialPrefetch,
+        );
+        _initialPrefetchDone = true;
         widget.onLayoutCalculated?.call(frame);
       }
     } catch (_) {
@@ -538,7 +619,11 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
     }
   }
 
-  Future<bool> _tryUpdateTexture(List<PositionedDanmakuItem> frame) async {
+  Future<bool> _tryUpdateTexture(
+    List<PositionedDanmakuItem> frame, {
+    String? prefetchChars,
+    bool isInitialPrefetch = false,
+  }) async {
     if (!Next2TextureBridge.isSupported || _layoutSize.isEmpty) {
       return false;
     }
@@ -665,6 +750,38 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
         .clamp(0.25, 8.0)
         .toDouble();
 
+    // 优化1（首播）：texture 就绪 + fontScale 已算，立即投递首屏预热给 worker，
+    // 然后等 worker 算几帧再继续首帧 draw。首帧 draw 时部分首屏字符已 drain 填入
+    // atlas，减少 sync 兜底阻塞。代价：首帧延迟 200ms（弹幕晚 200ms 显示），
+    // 换首播卡顿减小。仅首播首帧执行（isInitialPrefetch）。
+    String? effectivePrefetch = prefetchChars;
+    if (isInitialPrefetch &&
+        effectivePrefetch != null &&
+        effectivePrefetch.isNotEmpty) {
+      try {
+        await _textureBridge.setFrame(
+          items: const <PositionedDanmakuItem>[],
+          fontSize: widget.fontSize,
+          outlineWidth: widget.outlineWidth,
+          shadowStyle: widget.shadowStyle,
+          opacity: 1.0,
+          customFontFamily: widget.customFontFamily,
+          customFontFilePath: widget.customFontFilePath,
+          scaleX: widthScale,
+          scaleY: heightScale,
+          fontScale: fontScale,
+          playbackRate: widget.playbackRate,
+          framePayload: <String, dynamic>{
+            'items': const <Map<String, dynamic>>[],
+            'prefetch_chars': effectivePrefetch,
+          },
+        );
+        await Future.delayed(const Duration(milliseconds: 200));
+      } catch (_) {}
+      if (!mounted) return false;
+      effectivePrefetch = null;
+    }
+
     final prepared = await _emojiPipeline.buildPayload(
       items: frame,
       fontSize: widget.fontSize,
@@ -673,6 +790,7 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
       fontScale: fontScale,
       locale: locale,
       playbackRate: widget.playbackRate,
+      prefetchChars: effectivePrefetch,
     );
 
     final pushed = await _textureBridge.setFrame(

@@ -1,5 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
@@ -16,13 +17,21 @@ import 'package:kmbal_ionicons/kmbal_ionicons.dart';
 import 'bounce_hover_scale.dart';
 import 'video_settings_menu.dart';
 import 'dart:async';
-import 'package:nipaplay/services/desktop_pip_window_service.dart';
+import 'package:nipaplay/services/desktop_player_window_service.dart';
+import 'package:nipaplay/widgets/desktop_transient_overlay.dart';
 import 'keyboard_activatable.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_player_menu.dart';
 
 class ModernVideoControls extends StatefulWidget {
   final bool showFullscreenButton;
+  final bool compactPortrait;
 
-  const ModernVideoControls({super.key, this.showFullscreenButton = true});
+  const ModernVideoControls({
+    super.key,
+    this.showFullscreenButton = true,
+    this.compactPortrait = false,
+  });
 
   @override
   State<ModernVideoControls> createState() => _ModernVideoControlsState();
@@ -48,6 +57,8 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
   bool _playStateChangedByDrag = false;
   OverlayEntry? _playlistOverlay;
   OverlayEntry? _settingsOverlay;
+  DesktopTransientOverlay? _playlistPopup;
+  DesktopTransientOverlay? _settingsPopup;
   Timer? _doubleTapTimer;
   int _tapCount = 0;
   static const _doubleTapTimeout = Duration(milliseconds: 360);
@@ -149,14 +160,34 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
     );
   }
 
-  void _showSettingsMenu(BuildContext buttonContext) {
+  Future<void> _showSettingsMenu(BuildContext buttonContext) async {
     final videoState = Provider.of<VideoPlayerState>(
       buttonContext,
       listen: false,
     );
+    if (widget.compactPortrait) {
+      videoState.setControlsVisibilityLocked(true);
+      try {
+        await CupertinoBottomSheet.showPage<void>(
+          context: buttonContext,
+          title: '播放器菜单',
+          heightRatio: 0.94,
+          floatingTitle: true,
+          rootPageBuilder: (_) => const CupertinoPlayerMenu(),
+        );
+      } finally {
+        videoState.setControlsVisibilityLocked(false);
+      }
+      return;
+    }
+    _playlistPopup?.close();
+    _playlistPopup = null;
+    _settingsPopup?.close();
+    _settingsPopup = null;
     _playlistOverlay?.remove();
     _playlistOverlay = null;
     _settingsOverlay?.remove();
+    _settingsOverlay = null;
     videoState.setControlsVisibilityLocked(true);
 
     Rect? anchorRect;
@@ -170,6 +201,28 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
       if (keyRenderBox != null && keyRenderBox.hasSize) {
         final position = keyRenderBox.localToGlobal(Offset.zero);
         anchorRect = position & keyRenderBox.size;
+      }
+    }
+
+    if (anchorRect != null &&
+        DesktopMultiWindow.isSecondaryWindow(buttonContext)) {
+      final popup = DesktopTransientOverlay.showPopup(
+        context: buttonContext,
+        anchorRect: anchorRect,
+        size: const Size(320, 600),
+        placement: DesktopTransientWindowPlacement.above,
+        contentBuilder: (_, close) => VideoSettingsMenu(
+          standaloneWindow: true,
+          onClose: close,
+        ),
+        onClosed: () {
+          _settingsPopup = null;
+          videoState.setControlsVisibilityLocked(false);
+        },
+      );
+      if (popup != null) {
+        _settingsPopup = popup;
+        return;
       }
     }
 
@@ -193,9 +246,14 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
       buttonContext,
       listen: false,
     );
+    _settingsPopup?.close();
+    _settingsPopup = null;
+    _playlistPopup?.close();
+    _playlistPopup = null;
     _settingsOverlay?.remove();
     _settingsOverlay = null;
     _playlistOverlay?.remove();
+    _playlistOverlay = null;
     videoState.setControlsVisibilityLocked(true);
 
     Rect? anchorRect;
@@ -209,6 +267,30 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
       if (keyRenderBox != null && keyRenderBox.hasSize) {
         final position = keyRenderBox.localToGlobal(Offset.zero);
         anchorRect = position & keyRenderBox.size;
+      }
+    }
+
+    if (anchorRect != null &&
+        DesktopMultiWindow.isSecondaryWindow(buttonContext)) {
+      final popup = DesktopTransientOverlay.showPopup(
+        context: buttonContext,
+        anchorRect: anchorRect,
+        size: const Size(320, 600),
+        placement: DesktopTransientWindowPlacement.above,
+        contentBuilder: (_, close) => VideoSettingsMenu(
+          standaloneWindow: true,
+          initialPaneId: PlayerMenuPaneId.playlist,
+          hideBackButtonForInitialPane: true,
+          onClose: close,
+        ),
+        onClosed: () {
+          _playlistPopup = null;
+          videoState.setControlsVisibilityLocked(false);
+        },
+      );
+      if (popup != null) {
+        _playlistPopup = popup;
+        return;
       }
     }
 
@@ -231,6 +313,8 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
 
   @override
   void dispose() {
+    _playlistPopup?.close();
+    _settingsPopup?.close();
     _playlistOverlay?.remove();
     _settingsOverlay?.remove();
     _doubleTapTimer?.cancel();
@@ -291,22 +375,155 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
     return rect.contains(globalPosition);
   }
 
-  Future<void> _handlePipButtonTap(VideoPlayerState videoState) async {
-    final pipService = DesktopPipWindowService.instance;
-    if (pipService.isCurrentWindowPip) {
-      await pipService.closeCurrentPipWindowAndRestore(videoState);
+  Future<void> _handleWindowModeButtonTap(
+    VideoPlayerState videoState,
+  ) async {
+    final windowService = DesktopPlayerWindowService.instance;
+    if (DesktopMultiWindow.isSecondaryWindow(context)) {
+      await windowService.returnPlayerToMain();
       return;
     }
-    await pipService.openPipWindow(videoState);
+    await windowService.detachPlayer(context, videoState);
+  }
+
+  Future<void> _toggleFullscreen(
+    VideoPlayerState videoState,
+    WindowController? detachedWindow,
+  ) async {
+    if (detachedWindow != null) {
+      await detachedWindow.setFullscreen(!detachedWindow.isFullscreen);
+      return;
+    }
+    await videoState.toggleFullscreen();
+  }
+
+  Widget _buildProgressBar(
+    VideoPlayerState videoState, {
+    bool compact = false,
+  }) {
+    return VideoProgressBar(
+      key: _progressBarKey,
+      videoState: videoState,
+      hoverTime: null,
+      isDragging: _isDragging,
+      compact: compact,
+      chapters:
+          videoState.chapterMarkersEnabled ? videoState.chapters : const [],
+      durationMs: videoState.duration.inMilliseconds,
+      currentChapter: videoState.currentChapter,
+      onPositionUpdate: (_) {},
+      onDraggingStateChange: (isDragging) {
+        if (isDragging && videoState.status == PlayerStatus.paused) {
+          _playStateChangedByDrag = true;
+          videoState.togglePlayPause();
+        } else if (!isDragging && _playStateChangedByDrag) {
+          videoState.togglePlayPause();
+          _playStateChangedByDrag = false;
+        }
+        setState(() {
+          _isDragging = isDragging;
+        });
+      },
+      formatDuration: _formatDuration,
+    );
+  }
+
+  Widget _buildCompactPortraitControls(VideoPlayerState videoState) {
+    const iconSize = 28.0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: MouseRegion(
+        onEnter: (_) => videoState.setControlsHovered(true),
+        onExit: (_) => videoState.setControlsHovered(false),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _buildControlButton(
+              icon: Icon(
+                videoState.status == PlayerStatus.playing
+                    ? Ionicons.pause
+                    : Ionicons.play,
+                key: ValueKey<bool>(
+                  videoState.status == PlayerStatus.playing,
+                ),
+                color: Colors.white,
+                size: 32,
+              ),
+              onTap: videoState.togglePlayPause,
+              isPressed: _isPlayPressed,
+              isHovered: _isPlayHovered,
+              onHover: (value) => setState(() => _isPlayHovered = value),
+              onPressed: (value) => setState(() => _isPlayPressed = value),
+              tooltip: videoState.status == PlayerStatus.playing ? '暂停' : '播放',
+              useAnimatedSwitcher: true,
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: _buildProgressBar(videoState, compact: true)),
+            const SizedBox(width: 8),
+            Builder(
+              builder: (buttonContext) => SizedBox(
+                key: _settingsButtonKey,
+                child: _buildControlButton(
+                  icon: const Icon(
+                    Icons.tune_rounded,
+                    color: Colors.white,
+                    size: iconSize,
+                  ),
+                  onTap: () => unawaited(_showSettingsMenu(buttonContext)),
+                  isPressed: _isSettingsPressed,
+                  isHovered: _isSettingsHovered,
+                  onHover: (value) =>
+                      setState(() => _isSettingsHovered = value),
+                  onPressed: (value) =>
+                      setState(() => _isSettingsPressed = value),
+                  tooltip: '播放器菜单',
+                ),
+              ),
+            ),
+            if (widget.showFullscreenButton) ...[
+              const SizedBox(width: 8),
+              _buildControlButton(
+                icon: Icon(
+                  videoState.isFullscreen
+                      ? Icons.fullscreen_exit_rounded
+                      : Icons.fullscreen_rounded,
+                  key: ValueKey<bool>(videoState.isFullscreen),
+                  color: Colors.white,
+                  size: iconSize,
+                ),
+                onTap: videoState.toggleFullscreen,
+                isPressed: _isFullscreenPressed,
+                isHovered: _isFullscreenHovered,
+                onHover: (value) =>
+                    setState(() => _isFullscreenHovered = value),
+                onPressed: (value) =>
+                    setState(() => _isFullscreenPressed = value),
+                tooltip: videoState.isFullscreen ? '退出全屏' : '全屏',
+                useCustomAnimation: true,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final detachedWindow = DesktopMultiWindow.maybeControllerOf(context);
     return AnimatedBuilder(
-      animation: _tooltipManager,
+      animation: Listenable.merge(<Listenable>[
+        _tooltipManager,
+        if (detachedWindow != null) detachedWindow,
+      ]),
       builder: (context, child) {
         return Consumer<VideoPlayerState>(
           builder: (context, videoState, child) {
+            final isFullscreen =
+                detachedWindow?.isFullscreen ?? videoState.isFullscreen;
+            if (widget.compactPortrait) {
+              return _buildCompactPortraitControls(videoState);
+            }
             return Focus(
               canRequestFocus: true,
               autofocus: true,
@@ -341,41 +558,7 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                VideoProgressBar(
-                                  key: _progressBarKey,
-                                  videoState: videoState,
-                                  hoverTime: null,
-                                  isDragging: _isDragging,
-                                  // 章节标记受设置开关控制：关闭时传空列表，
-                                  // VideoProgressBar 不渲染分割线/高亮段，点击不触发章节跳转
-                                  chapters: videoState.chapterMarkersEnabled
-                                      ? videoState.chapters
-                                      : const [],
-                                  durationMs:
-                                      videoState.duration.inMilliseconds,
-                                  currentChapter: videoState.currentChapter,
-                                  onPositionUpdate: (position) {},
-                                  onDraggingStateChange: (isDragging) {
-                                    if (isDragging) {
-                                      // 如果是暂停状态，开始拖动时恢复播放
-                                      if (videoState.status ==
-                                          PlayerStatus.paused) {
-                                        _playStateChangedByDrag = true;
-                                        videoState.togglePlayPause();
-                                      }
-                                    } else {
-                                      // 拖动结束时，只有当是因为拖动而改变的播放状态时才恢复
-                                      if (_playStateChangedByDrag) {
-                                        videoState.togglePlayPause();
-                                        _playStateChangedByDrag = false;
-                                      }
-                                    }
-                                    setState(() {
-                                      _isDragging = isDragging;
-                                    });
-                                  },
-                                  formatDuration: _formatDuration,
-                                ),
+                                _buildProgressBar(videoState),
                                 const SizedBox(height: 8),
                                 Row(
                                   children: [
@@ -565,6 +748,7 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                                           fontWeight: FontWeight.normal,
                                           height: 1.0,
                                           textBaseline: TextBaseline.alphabetic,
+                                          decoration: TextDecoration.none,
                                         ),
                                         textAlign: TextAlign.center,
                                         softWrap: false,
@@ -574,26 +758,24 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
 
                                     const SizedBox(width: 12),
 
-                                    if (globals.isDesktop &&
-                                        DesktopPipWindowService
-                                            .isFeatureEnabled)
+                                    if (DesktopPlayerWindowService
+                                        .isFeatureEnabled)
                                       _buildControlButton(
                                         icon: Icon(
-                                          DesktopPipWindowService
-                                                  .instance.isCurrentWindowPip
-                                              ? Icons.picture_in_picture_rounded
-                                              : Icons
-                                                  .picture_in_picture_alt_rounded,
+                                          detachedWindow != null
+                                              ? Icons.call_merge_rounded
+                                              : Icons.open_in_new_rounded,
                                           key: ValueKey<bool>(
-                                            DesktopPipWindowService
-                                                .instance.isCurrentWindowPip,
+                                            detachedWindow != null,
                                           ),
                                           color: Colors.white,
                                           size: globals.isPhone ? 36 : 28,
                                         ),
                                         onTap: () {
                                           unawaited(
-                                            _handlePipButtonTap(videoState),
+                                            _handleWindowModeButtonTap(
+                                              videoState,
+                                            ),
                                           );
                                         },
                                         isPressed: _isPipPressed,
@@ -602,16 +784,22 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                                             () => _isPipHovered = value),
                                         onPressed: (value) => setState(
                                             () => _isPipPressed = value),
-                                        tooltip: DesktopPipWindowService
-                                                .instance.isCurrentWindowPip
-                                            ? '关闭小窗并回到主播放'
-                                            : '小窗播放',
+                                        tooltip: detachedWindow != null
+                                            ? _tooltipManager
+                                                .formatActionWithShortcut(
+                                                'toggle_detached_player',
+                                                '移回主窗口',
+                                              )
+                                            : _tooltipManager
+                                                .formatActionWithShortcut(
+                                                'toggle_detached_player',
+                                                '移到独立窗口',
+                                              ),
                                         useAnimatedSwitcher: true,
                                       ),
 
-                                    if (globals.isDesktop &&
-                                        DesktopPipWindowService
-                                            .isFeatureEnabled)
+                                    if (DesktopPlayerWindowService
+                                        .isFeatureEnabled)
                                       const SizedBox(width: 12),
 
                                     // 弹幕开关按钮
@@ -683,7 +871,11 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                                               size: globals.isPhone ? 36 : 28,
                                             ),
                                             onTap: () {
-                                              _showSettingsMenu(buttonContext);
+                                              unawaited(
+                                                _showSettingsMenu(
+                                                  buttonContext,
+                                                ),
+                                              );
                                             },
                                             isPressed: _isSettingsPressed,
                                             isHovered: _isSettingsHovered,
@@ -707,14 +899,14 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                                                   ? Icons
                                                       .fullscreen_exit_rounded
                                                   : Icons.fullscreen_rounded)
-                                              : (videoState.isFullscreen
+                                              : (isFullscreen
                                                   ? Icons
                                                       .fullscreen_exit_rounded
                                                   : Icons.fullscreen_rounded),
                                           key: ValueKey<bool>(
                                             globals.isTablet
                                                 ? videoState.isAppBarHidden
-                                                : videoState.isFullscreen,
+                                                : isFullscreen,
                                           ),
                                           color: Colors.white,
                                           size: globals.isPhone ? 36 : 32,
@@ -722,7 +914,10 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                                         onTap: () => globals.isTablet
                                             ? videoState
                                                 .toggleAppBarVisibility()
-                                            : videoState.toggleFullscreen(),
+                                            : _toggleFullscreen(
+                                                videoState,
+                                                detachedWindow,
+                                              ),
                                         isPressed: _isFullscreenPressed,
                                         isHovered: _isFullscreenHovered,
                                         onHover: (value) => setState(
@@ -734,13 +929,11 @@ class _ModernVideoControlsState extends State<ModernVideoControls> {
                                                 ? '显示菜单栏'
                                                 : '隐藏菜单栏')
                                             : globals.isPhone
-                                                ? (videoState.isFullscreen
-                                                    ? '退出全屏'
-                                                    : '全屏')
+                                                ? (isFullscreen ? '退出全屏' : '全屏')
                                                 : _tooltipManager
                                                     .formatActionWithShortcut(
                                                     'fullscreen',
-                                                    videoState.isFullscreen
+                                                    isFullscreen
                                                         ? '退出全屏'
                                                         : '全屏',
                                                   ),

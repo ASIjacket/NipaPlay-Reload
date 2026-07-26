@@ -28,6 +28,7 @@ class VideoSettingsMenu extends StatefulWidget {
   final GlobalKey? anchorKey;
   final PlayerMenuPaneId? initialPaneId;
   final bool hideBackButtonForInitialPane;
+  final bool standaloneWindow;
 
   const VideoSettingsMenu({
     super.key,
@@ -37,6 +38,7 @@ class VideoSettingsMenu extends StatefulWidget {
     this.anchorKey,
     this.initialPaneId,
     this.hideBackButtonForInitialPane = false,
+    this.standaloneWindow = false,
   });
 
   @override
@@ -50,7 +52,8 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
   late final PlayerKernelType _currentKernelType;
   static const double _menuWidth = 300;
   static const double _menuRightOffset = 20;
-  static const double _menuHeight = 420;
+  static const double _menuHeaderHeight = 44;
+  static const double _settingsItemHeight = 44;
   static const int _maxAnchorRefreshAttempts = 6;
   static const Duration _menuEnterDuration = Duration(milliseconds: 240);
   static const Duration _menuExitDuration = Duration(milliseconds: 170);
@@ -252,6 +255,7 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
   SettingsMenuScope _wrapMenu({
     required bool showBackItem,
     required Widget child,
+    required double height,
     bool forceShowHeader = false,
     bool? useBackButtonOverride,
   }) {
@@ -286,16 +290,83 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
       lockControlsVisible: true,
       anchorRect: resolvedAnchorRect,
       showPointer: resolvedAnchorRect != null,
-      height: _menuHeight,
+      height: height,
       requestClose: requestClose,
+      standaloneWindow: widget.standaloneWindow,
       child: child,
     );
+  }
+
+  double _heightForSettingsItemCount(
+    int itemCount, {
+    bool includeHeader = false,
+  }) {
+    final visibleItemCount = itemCount <= 0 ? 1 : itemCount;
+    return (includeHeader ? _menuHeaderHeight : 0) +
+        visibleItemCount * _settingsItemHeight;
+  }
+
+  double _heightForPane(PlayerMenuPaneId paneId) {
+    return _heightForSettingsItemCount(
+      _itemCountForPane(paneId),
+      includeHeader: true,
+    );
+  }
+
+  int _itemCountForPane(PlayerMenuPaneId paneId) {
+    switch (paneId) {
+      case PlayerMenuPaneId.subtitleSettings:
+        return videoState.player.getPlayerKernelName() == 'Media Kit' ? 11 : 1;
+      case PlayerMenuPaneId.subtitleTracks:
+        return _subtitleTrackItemCount();
+      case PlayerMenuPaneId.subtitleList:
+        return 8;
+      case PlayerMenuPaneId.audioTracks:
+        return _boundedListItemCount(
+          videoState.player.mediaInfo.audio?.length ?? 1,
+        );
+      case PlayerMenuPaneId.danmakuSettings:
+        return 7;
+      case PlayerMenuPaneId.danmakuTracks:
+        return _boundedListItemCount(videoState.danmakuTracks.length + 3);
+      case PlayerMenuPaneId.danmakuList:
+        return _boundedListItemCount(videoState.danmakuList.length);
+      case PlayerMenuPaneId.danmakuOffset:
+        return 8;
+      case PlayerMenuPaneId.playbackRate:
+        return 13;
+      case PlayerMenuPaneId.playlist:
+        return 8;
+      case PlayerMenuPaneId.jellyfinQuality:
+        return 9;
+      case PlayerMenuPaneId.playbackInfo:
+        return 8;
+      case PlayerMenuPaneId.seekStep:
+        return 18;
+    }
+  }
+
+  int _subtitleTrackItemCount() {
+    final embeddedCount = videoState.player.mediaInfo.subtitle?.length ?? 0;
+    final hasExternalSubtitle =
+        (videoState.currentExternalSubtitlePath?.isNotEmpty ?? false);
+    return _boundedListItemCount(
+      2 + embeddedCount + (hasExternalSubtitle ? 1 : 0),
+    );
+  }
+
+  int _boundedListItemCount(int itemCount) {
+    if (itemCount <= 0) {
+      return 1;
+    }
+    return itemCount;
   }
 
   Widget _buildPane(
     PlayerMenuPaneId paneId, {
     required VoidCallback onPaneClose,
     required bool showBackButton,
+    required double height,
   }) {
     late final Widget child;
     switch (paneId) {
@@ -392,6 +463,7 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
 
     return _wrapMenu(
       showBackItem: showBackButton,
+      height: height,
       forceShowHeader: !showBackButton,
       useBackButtonOverride: showBackButton,
       child: child,
@@ -426,6 +498,7 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
             .build()
             .where((item) => item.paneId != PlayerMenuPaneId.playlist)
             .toList();
+        final double menuHeight = _heightForSettingsItemCount(menuItems.length);
         final bool hideBackForStandaloneInitialPane =
             widget.hideBackButtonForInitialPane &&
                 widget.initialPaneId != null &&
@@ -438,6 +511,7 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
         final Widget menuContent = _activePaneId == null
             ? _wrapMenu(
                 showBackItem: false,
+                height: menuHeight,
                 child: BaseSettingsMenu(
                   title: '设置',
                   width: _menuWidth,
@@ -455,6 +529,9 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
                 _activePaneId!,
                 onPaneClose: paneCloseCallback,
                 showBackButton: !hideBackForStandaloneInitialPane,
+                height: hideBackForStandaloneInitialPane
+                    ? _heightForPane(_activePaneId!)
+                    : menuHeight,
               );
         final Widget animatedMenuContent = FadeTransition(
           opacity: _menuFadeAnimation,
@@ -467,6 +544,15 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
             ),
           ),
         );
+        if (widget.standaloneWindow) {
+          return Material(
+            type: MaterialType.transparency,
+            child: IgnorePointer(
+              ignoring: _isClosing,
+              child: animatedMenuContent,
+            ),
+          );
+        }
         return Material(
           type: MaterialType.transparency,
           child: SizedBox(

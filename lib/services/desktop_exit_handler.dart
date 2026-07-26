@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' as material;
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:nipaplay/providers/service_provider.dart';
+import 'package:nipaplay/services/single_instance_service.dart';
 import 'package:nipaplay/services/smb2_native_service_ffi.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
@@ -41,6 +42,22 @@ class DesktopExitHandler
 
   static final DesktopExitHandler instance = DesktopExitHandler._();
 
+  @visibleForTesting
+  static bool supportsWindowCloseInterception({
+    required bool isWindows,
+    required bool isMacOS,
+    required bool isLinux,
+  }) {
+    return isWindows || isMacOS || isLinux;
+  }
+
+  static bool get _supportsWindowCloseInterception =>
+      supportsWindowCloseInterception(
+        isWindows: Platform.isWindows,
+        isMacOS: Platform.isMacOS,
+        isLinux: Platform.isLinux,
+      );
+
   material.GlobalKey<material.NavigatorState>? _navigatorKey;
 
   bool _bindingHooked = false;
@@ -63,7 +80,7 @@ class DesktopExitHandler
       _bindingHooked = true;
     }
 
-    if ((Platform.isMacOS || Platform.isLinux) && !_windowListenerHooked) {
+    if (_supportsWindowCloseInterception && !_windowListenerHooked) {
       try {
         await windowManager.setPreventClose(true);
         _preventCloseEnabled = true;
@@ -98,6 +115,11 @@ class DesktopExitHandler
           _scheduleHardExitFallback();
           await _prepareForExit();
           await _closeWindowSafely();
+          // Windows/Linux: 所有 Dart 侧清理已完成，直接 exit(0) 终止进程，
+          // 避免等待 Flutter 引擎的原生 shutdown（media_kit/libmpv 线程等）耗时数秒。
+          if (Platform.isWindows || Platform.isLinux) {
+            exit(0);
+          }
           return ui.AppExitResponse.exit;
       }
     } finally {
@@ -107,7 +129,7 @@ class DesktopExitHandler
 
   @override
   void onWindowClose() async {
-    if (!(Platform.isMacOS || Platform.isLinux)) return;
+    if (!_supportsWindowCloseInterception) return;
     if (_closingWindow) return;
     if (_quitting) {
       await _closeWindowSafely();
@@ -370,7 +392,9 @@ class DesktopExitHandler
     try {
       await _closeWindowSafely();
     } catch (_) {}
-    if (Platform.isLinux) {
+    // Windows/Linux: Dart 侧清理已完成，直接 exit(0) 终止进程，
+    // 避免等待 Flutter 引擎的原生 shutdown 耗时数秒。
+    if (Platform.isWindows || Platform.isLinux) {
       exit(0);
     }
   }
@@ -386,6 +410,10 @@ class DesktopExitHandler
 
     try {
       Smb2NativeService.instance.dispose();
+    } catch (_) {}
+
+    try {
+      await SingleInstanceService.dispose();
     } catch (_) {}
 
     if (_trayReady) {

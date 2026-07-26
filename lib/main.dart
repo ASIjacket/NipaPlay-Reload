@@ -1,15 +1,19 @@
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
 import 'package:nipaplay/services/remote_control_access_guard_service.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:kmbal_ionicons/kmbal_ionicons.dart';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:nipaplay/l10n/app_locale_utils.dart';
 import 'package:nipaplay/l10n/app_localizations.dart';
+import 'package:nipaplay/app/app_navigation_scope.dart';
+import 'package:nipaplay/app/app_display_surface.dart';
+import 'package:nipaplay/app/app_page_ids.dart';
+import 'package:nipaplay/app/unified_app_view_presenter.dart';
+import 'package:nipaplay/app/unified_app_pages.dart';
 import 'package:nipaplay/pages/tab_labels.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/theme_notifier.dart';
@@ -21,13 +25,8 @@ import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_preferences.d
 import 'package:nipaplay/themes/nipaplay/widgets/system_resource_display.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:provider/provider.dart';
-import 'pages/anime_page.dart';
 import 'themes/nipaplay/pages/settings/settings_entries.dart';
-import 'themes/nipaplay/pages/settings_page.dart';
 import 'pages/play_video_page.dart';
-import 'pages/new_series_page.dart';
-import 'pages/dashboard_home_page.dart';
-import 'pages/torrent_download_page.dart';
 import 'themes/cupertino/pages/cupertino_main_page.dart';
 import 'utils/settings_storage.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -54,7 +53,6 @@ import 'package:nipaplay/providers/emby_transcode_provider.dart';
 import 'package:nipaplay/providers/labs_settings_provider.dart';
 import 'package:nipaplay/plugins/plugin_service.dart';
 import 'package:nipaplay/themes/theme_descriptor.dart';
-import 'themes/nipaplay/pages/settings/account_page.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'services/file_picker_service.dart';
@@ -70,12 +68,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:nipaplay/services/debug_log_service.dart';
 import 'package:nipaplay/services/file_log_service.dart';
 import 'package:nipaplay/services/file_association_service.dart';
+import 'package:nipaplay/services/external_player_console_service.dart';
 import 'package:nipaplay/services/single_instance_service.dart';
 import 'package:nipaplay/services/desktop_startup_window_preferences.dart';
 import 'package:nipaplay/danmaku_abstraction/danmaku_kernel_factory.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/splash_screen.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/web_remote_access_gate.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nipaplay/services/playback_service.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -93,12 +91,9 @@ import 'package:nipaplay/services/http_client_initializer.dart';
 import 'package:nipaplay/services/smb_proxy_service.dart';
 import 'package:nipaplay/services/server_connectivity_service.dart';
 import 'package:nipaplay/providers/bottom_bar_provider.dart';
-import 'package:nipaplay/providers/webdav_quick_access_provider.dart';
-import 'pages/webdav_browser_page.dart';
 import 'package:nipaplay/models/anime_detail_display_mode.dart';
 import 'package:nipaplay/models/background_image_render_mode.dart';
-import 'package:nipaplay/pages/desktop_pip_window_app.dart';
-import 'package:nipaplay/services/desktop_pip_window_service.dart';
+import 'package:nipaplay/services/desktop_player_window_service.dart';
 import 'constants/settings_keys.dart';
 import 'player_abstraction/media_kit_player_adapter.dart';
 import 'utils/launch_file_handler.dart';
@@ -106,6 +101,7 @@ import 'utils/linux_system_font_loader.dart';
 import 'utils/app_theme.dart';
 import 'package:nipaplay/services/desktop_exit_handler_stub.dart'
     if (dart.library.io) 'package:nipaplay/services/desktop_exit_handler.dart';
+import 'package:nipaplay/src/rust/rust_init.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = globals.navigatorKey;
 
@@ -164,39 +160,25 @@ Alignment _resolveStartupWindowAlignment(
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) {
+    try {
+      await ensureRustInitialized();
+    } catch (error) {
+      debugPrint('Rust 核心初始化失败，将使用 Dart/C++ fallback: $error');
+    }
+  }
   _installFrameTimingTrace();
   await ensureLinuxSystemFontLoaded();
   await globals.initializeStartupDeviceProfile();
+  if (globals.isPhone) {
+    await LiquidGlassWidgets.initialize();
+  }
   debugPaintBaselinesEnabled = false;
   debugPaintSizeEnabled = false;
   WidgetsBinding.instance.addPostFrameCallback((_) {
     debugPaintBaselinesEnabled = false;
     debugPaintSizeEnabled = false;
   });
-
-  final pipLaunchPayload = DesktopPipWindowService.tryParseLaunchPayload(args);
-  final bool isSubWindowProcess =
-      args.isNotEmpty && args.first == 'multi_window';
-  if (isSubWindowProcess) {
-    if (DesktopPipWindowService.isFeatureEnabled &&
-        pipLaunchPayload != null &&
-        pipLaunchPayload.isPipWindow) {
-      await runDesktopPipWindowApp(pipLaunchPayload);
-      return;
-    }
-    runApp(const SizedBox.shrink());
-    return;
-  }
-
-  if (globals.isDesktop) {
-    DesktopPipWindowService.instance.configureCurrentWindow(
-      windowId: 0,
-      isPipWindow: false,
-    );
-    if (DesktopPipWindowService.isFeatureEnabled) {
-      await DesktopPipWindowService.instance.installMainMethodHandler();
-    }
-  }
 
   String? launchFilePath;
   if (globals.isDesktop && args.isNotEmpty) {
@@ -580,7 +562,7 @@ void main(List<String> args) async {
       });
     }
 
-    runApp(
+    runDesktopMultiWindowApp(
       MultiProvider(
         providers: [
           ChangeNotifierProvider(create: (_) => BottomBarProvider()),
@@ -624,7 +606,9 @@ void main(List<String> args) async {
           ChangeNotifierProvider.value(
               value: ServiceProvider.dandanplayRemoteProvider),
         ],
-        child: NipaPlayApp(launchFilePath: launchFilePath),
+        child: DesktopMultiWindowHost(
+          child: NipaPlayApp(launchFilePath: launchFilePath),
+        ),
       ),
     );
   });
@@ -702,6 +686,8 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ExternalPlayerConsoleService.sessionAvailability
+        .addListener(_onExternalPlayerConsoleAvailabilityChanged);
     // 启动后设置WatchHistoryProvider监听ScanService
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (globals.isDesktop) {
@@ -739,7 +725,13 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ExternalPlayerConsoleService.sessionAvailability
+        .removeListener(_onExternalPlayerConsoleAvailabilityChanged);
     super.dispose();
+  }
+
+  void _onExternalPlayerConsoleAvailabilityChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -809,50 +801,31 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MacosPlatformMenu(
       navigationItemsBuilder: (ctx) {
-        final webdav = ctx.read<WebDAVQuickAccessProvider>();
-        final downloader = ctx.read<DownloaderSettingsProvider>();
-        final showWebDAV = webdav.showWebDAVTab;
-        final showDownloader =
-            globals.isDownloaderSupportedPlatform && downloader.enabled;
-        final mediaLibIdx = showWebDAV ? 3 : 2;
-        final downloaderIdx = showWebDAV ? 4 : 3;
-        final accountIdx = showWebDAV
-            ? 5
-            : showDownloader
-                ? 4
-                : 3;
-        final l10n = AppLocalizations.of(ctx);
-        final items = <NavigationItem>[
-          NavigationItem(
-            label: l10n?.tabHome ?? '主页',
-            onSelected: () => _navigateToPage(ctx, 0),
+        final webdav = ctx.watch<WebDAVQuickAccessProvider>();
+        final downloader = ctx.watch<DownloaderSettingsProvider>();
+        final settings = ctx.watch<SettingsProvider>();
+        final localizations = lookupAppLocalizations(
+          ctx.watch<AppLanguageProvider>().locale,
+        );
+        final pages = buildUnifiedAppPages(
+          availability: AppPageAvailability(
+            showWebDAV: webdav.showWebDAVTab,
+            showDownloader:
+                globals.isDownloaderSupportedPlatform && downloader.enabled,
+            showExternalPlayerConsole:
+                ExternalPlayerConsoleService.isSupportedPlatform &&
+                    ExternalPlayerConsoleService.hasActiveSession &&
+                    !settings.externalPlayerConsoleWindowMode,
           ),
-          NavigationItem(
-            label: l10n?.tabVideoPlay ?? '视频播放',
-            onSelected: () => _navigateToPage(ctx, 1),
-          ),
-        ];
-        if (showWebDAV) {
-          items.add(NavigationItem(
-            label: 'WebDAV',
-            onSelected: () => _navigateToPage(ctx, 2),
-          ));
-        }
-        items.add(NavigationItem(
-          label: l10n?.tabMediaLibrary ?? '媒体库',
-          onSelected: () => _navigateToPage(ctx, mediaLibIdx),
-        ));
-        if (showDownloader) {
-          items.add(NavigationItem(
-            label: l10n?.tabTorrentDownload ?? '下载器',
-            onSelected: () => _navigateToPage(ctx, downloaderIdx),
-          ));
-        }
-        items.add(NavigationItem(
-          label: l10n?.tabAccount ?? '个人中心',
-          onSelected: () => _navigateToPage(ctx, accountIdx),
-        ));
-        return items;
+        );
+        return pages
+            .map(
+              (page) => NavigationItem(
+                label: page.title(localizations),
+                onSelected: () => _navigateToPage(ctx, page.id),
+              ),
+            )
+            .toList(growable: false);
       },
       onUploadVideo: () {
         final ctx = navigatorKey.currentState?.overlay?.context;
@@ -861,20 +834,22 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
       onOpenSettings: () {
         final ctx = navigatorKey.currentState?.overlay?.context;
         if (ctx == null) return;
-        final uiThemeProvider =
-            Provider.of<UIThemeProvider>(ctx, listen: false);
-        if (uiThemeProvider.isCupertinoTheme) {
-          _navigateToPage(ctx, 3);
-        } else {
-          SettingsPage.showWindow(ctx);
-        }
+        unawaited(
+          UnifiedAppViewPresenter.show<void>(
+            ctx,
+            viewId: AppPageIds.settings,
+          ),
+        );
       },
       onShowAbout: () {
         final ctx = navigatorKey.currentState?.overlay?.context;
         if (ctx != null) {
-          SettingsPage.showWindow(
-            ctx,
-            initialEntryId: NipaplaySettingEntryIds.about,
+          unawaited(
+            UnifiedAppViewPresenter.show<void>(
+              ctx,
+              viewId: AppPageIds.settings,
+              initialSubpageId: NipaplaySettingEntryIds.about,
+            ),
           );
         }
       },
@@ -977,6 +952,7 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
               isWeb: kIsWeb,
               isIOS: !kIsWeb && Platform.isIOS,
               isTablet: globals.isTablet,
+              isTelevision: globals.isAndroidTv,
             );
             Widget overlayBuilder(Widget child) {
               return _buildGlobalAppOverlay(child, isDragging: _isDragging);
@@ -992,22 +968,26 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
               localizationsDelegates: localizationsDelegates,
               settings: uiThemeProvider.currentThemeSettings,
               overlayBuilder: overlayBuilder,
-              materialHomeBuilder: () => kIsWeb
-                  ? WebRemoteAccessGate(
-                      child: MainPage(launchFilePath: widget.launchFilePath),
-                    )
-                  : MainPage(launchFilePath: widget.launchFilePath),
-              fluentHomeBuilder: () => kIsWeb
-                  ? WebRemoteAccessGate(
-                      child: MainPage(launchFilePath: widget.launchFilePath),
-                    )
-                  : MainPage(launchFilePath: widget.launchFilePath),
-              cupertinoHomeBuilder: () => kIsWeb
-                  ? WebRemoteAccessGate(
-                      child: CupertinoMainPage(
-                          launchFilePath: widget.launchFilePath),
-                    )
-                  : CupertinoMainPage(launchFilePath: widget.launchFilePath),
+              homeBuilders: <AppDisplaySurface, Widget Function()>{
+                AppDisplaySurface.desktopTablet: () => kIsWeb
+                    ? WebRemoteAccessGate(
+                        child: MainPage(launchFilePath: widget.launchFilePath),
+                      )
+                    : MainPage(launchFilePath: widget.launchFilePath),
+                AppDisplaySurface.phone: () => kIsWeb
+                    ? WebRemoteAccessGate(
+                        child: CupertinoMainPage(
+                          launchFilePath: widget.launchFilePath,
+                        ),
+                      )
+                    : CupertinoMainPage(
+                        launchFilePath: widget.launchFilePath,
+                      ),
+                // Temporary compatibility renderer. A dedicated television
+                // shell can replace this entry without changing page data.
+                AppDisplaySurface.television: () =>
+                    MainPage(launchFilePath: widget.launchFilePath),
+              },
             );
 
             return _wrapWithSystemUiOverlay(
@@ -1097,13 +1077,6 @@ class MainPage extends StatefulWidget {
 
 class MainPageState extends State<MainPage>
     with TickerProviderStateMixin, WindowListener {
-  // Base tab indices (before WebDAV insertion).
-  static const int tabHome = 0;
-  static const int tabVideoPlay = 1;
-  static const int tabMediaLibrary = 2;
-  static const int tabTorrentDownload = 3;
-  static const int tabAccount = 4;
-
   bool isMaximized = false;
   TabController? globalTabController;
   bool _showSplash = true;
@@ -1111,18 +1084,15 @@ class MainPageState extends State<MainPage>
   bool _useLargeScreenLayout = false;
   StreamSubscription<String>? _androidFileAssociationSubscription;
   DownloaderSettingsProvider? _downloaderSettingsProvider;
+  SettingsProvider? _settingsProvider;
 
-  // 动态页面列表
-  static const List<Widget> _basePages = [
-    DashboardHomePage(),
-    PlayVideoPage(),
-    AnimePage(),
-    TorrentDownloadPage(),
-    AccountPage(),
-  ];
+  List<UnifiedAppPage> _pageDefinitions = const <UnifiedAppPage>[];
   List<Widget> _pages = [];
   bool _showWebDAVTab = false;
   bool _showDownloaderTab = globals.isDownloaderSupportedPlatform;
+  bool _showExternalPlayerConsoleTab =
+      ExternalPlayerConsoleService.isSupportedPlatform &&
+          ExternalPlayerConsoleService.hasActiveSession;
   WebDAVQuickAccessProvider? _webdavQuickAccessProvider;
   PluginService? _pluginService;
 
@@ -1140,44 +1110,36 @@ class MainPageState extends State<MainPage>
       globals.isDownloaderSupportedPlatform &&
       (_downloaderSettingsProvider?.enabled ?? true);
 
+  String get _selectedPageId {
+    if (_pageDefinitions.isEmpty) return AppPageIds.home;
+    final index = globalTabController?.index ?? 0;
+    if (index < 0 || index >= _pageDefinitions.length) {
+      return AppPageIds.home;
+    }
+    return _pageDefinitions[index].id;
+  }
+
+  void _selectPage(String pageId) {
+    final targetIndex = appPageIndexById(_pageDefinitions, pageId);
+    final controller = globalTabController;
+    if (targetIndex < 0 ||
+        controller == null ||
+        controller.index == targetIndex) {
+      return;
+    }
+    controller.animateTo(targetIndex);
+  }
+
   // TabChangeNotifier监听 - Temporarily remove or comment out for Scheme 1
   TabChangeNotifier? _tabChangeNotifier;
   void _onTabChangeRequested() {
-    debugPrint('[MainPageState] _onTabChangeRequested triggered.');
-    final index = _tabChangeNotifier?.targetTabIndex;
-    debugPrint('[MainPageState] targetTabIndex: $index');
-
-    if (index != null) {
-      final normalizedIndex = _normalizeTabIndex(index);
-      debugPrint('[MainPageState] 准备调用_manageHotkeys()...');
-      _manageHotkeys();
-      debugPrint('[MainPageState] _manageHotkeys()调用完成');
-
-      if (globalTabController != null) {
-        debugPrint(
-            '[MainPageState] globalTabController可用，当前索引: ${globalTabController!.index}');
-        if (globalTabController!.index != normalizedIndex) {
-          try {
-            debugPrint('[MainPageState] 尝试切换到标签: $normalizedIndex');
-            // 强制启用页面滑动动画
-            globalTabController!.animateTo(normalizedIndex);
-            debugPrint('[MainPageState] 已切换到标签: $normalizedIndex');
-          } catch (e) {
-            debugPrint('[MainPageState] 切换标签失败: $e');
-          }
-        } else {
-          debugPrint('[MainPageState] 已经是目标标签: $normalizedIndex，无需切换');
-        }
-      } else {
-        debugPrint('[MainPageState] globalTabController为空，无法切换标签');
-      }
-
-      // 清除标记，避免多次触发
-      debugPrint('[MainPageState] 正在清除targetTabIndex');
-      _tabChangeNotifier?.clearMainTabIndex();
-    } else {
-      debugPrint('[MainPageState] targetTabIndex为空，不进行任何操作');
-    }
+    final notifier = _tabChangeNotifier;
+    if (notifier == null) return;
+    final requestedPageId = notifier.targetPageId ??
+        AppPageIds.fromLegacyIndex(notifier.targetTabIndex ?? -1);
+    if (requestedPageId == null) return;
+    _selectPage(requestedPageId);
+    notifier.clearMainTabIndex();
   }
 
   void _manageHotkeys() {
@@ -1187,9 +1149,9 @@ class MainPageState extends State<MainPage>
       return;
     }
 
-    final tabIndex = globalTabController?.index ?? -1;
-
-    final bool shouldBeRegistered = tabIndex == 1 && videoState.hasVideo;
+    final bool shouldBeRegistered = videoState.hasVideo &&
+        (_selectedPageId == AppPageIds.video ||
+            DesktopPlayerWindowService.instance.isPlayerDetached);
 
     //debugPrint('[HotkeyManager] 最终判断: shouldBeRegistered=$shouldBeRegistered, currentlyRegistered=$_hotkeysAreRegistered');
 
@@ -1222,6 +1184,9 @@ class MainPageState extends State<MainPage>
   @override
   void initState() {
     super.initState();
+    DesktopPlayerWindowService.instance.addListener(_manageHotkeys);
+    ExternalPlayerConsoleService.sessionAvailability
+        .addListener(_onExternalPlayerConsoleAvailabilityChanged);
     _initialize();
   }
 
@@ -1252,8 +1217,18 @@ class MainPageState extends State<MainPage>
       _pluginService?.addListener(_onDownloaderSettingsChanged);
       PluginService.setBuildContext(context);
     } catch (_) {}
+    try {
+      _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+      _settingsProvider?.addListener(
+        _onExternalPlayerConsoleAvailabilityChanged,
+      );
+    } catch (_) {}
 
     // 构建初始页面列表
+    _showExternalPlayerConsoleTab =
+        ExternalPlayerConsoleService.isSupportedPlatform &&
+            ExternalPlayerConsoleService.hasActiveSession &&
+            !(_settingsProvider?.externalPlayerConsoleWindowMode ?? false);
     _rebuildPages();
 
     await _initializeController();
@@ -1280,46 +1255,61 @@ class MainPageState extends State<MainPage>
   void _onWebDAVSettingsChanged() {
     final showWebDAVTab = _webdavQuickAccessProvider?.showWebDAVTab ?? false;
     if (showWebDAVTab != _showWebDAVTab) {
-      final previousShowWebDAVTab = _showWebDAVTab;
-      final currentIndex = globalTabController?.index;
+      final currentPageId = _selectedPageId;
       _showWebDAVTab = showWebDAVTab;
       _rebuildPages();
       _rebuildTabController(
-        targetIndex: _remapIndexForWebDAVToggle(
-          currentIndex: currentIndex,
-          oldShowWebDAVTab: previousShowWebDAVTab,
-          newShowWebDAVTab: showWebDAVTab,
-        ),
+        targetPageId: currentPageId,
       );
     }
   }
 
   void _onDownloaderSettingsChanged() {
     final showDownloaderTab = _canShowDownloaderTab;
-    final currentIndex = globalTabController?.index;
-    final previousShowDownloaderTab = _showDownloaderTab;
     final currentNeedsRebuild = showDownloaderTab != _showDownloaderTab;
     if (!currentNeedsRebuild) return;
 
+    final currentPageId = _selectedPageId;
     _showDownloaderTab = showDownloaderTab;
     _rebuildPages();
     _rebuildTabController(
-      targetIndex: _remapIndexForDownloaderToggle(
-        currentIndex: currentIndex,
-        oldShowDownloaderTab: previousShowDownloaderTab,
-        newShowDownloaderTab: showDownloaderTab,
-      ),
+      targetPageId: currentPageId,
+    );
+  }
+
+  void _onExternalPlayerConsoleAvailabilityChanged() {
+    if (!mounted) return;
+    final shouldShow = ExternalPlayerConsoleService.isSupportedPlatform &&
+        ExternalPlayerConsoleService.hasActiveSession &&
+        !(_settingsProvider?.externalPlayerConsoleWindowMode ?? false);
+    if (shouldShow == _showExternalPlayerConsoleTab) return;
+
+    final currentPageId = _selectedPageId;
+    _showExternalPlayerConsoleTab = shouldShow;
+    _rebuildPages();
+    if (globalTabController == null) {
+      setState(() {});
+      return;
+    }
+    _rebuildTabController(
+      targetPageId:
+          !shouldShow && currentPageId == AppPageIds.externalPlayerConsole
+              ? AppPageIds.home
+              : currentPageId,
     );
   }
 
   void _rebuildPages() {
-    _pages = List<Widget>.from(_basePages);
-    if (_showWebDAVTab) {
-      _pages.insert(2, const WebDAVBrowserPage());
-    }
-    if (!_showDownloaderTab) {
-      _pages.removeAt(_showWebDAVTab ? 4 : 3);
-    }
+    _pageDefinitions = buildUnifiedAppPages(
+      availability: AppPageAvailability(
+        showWebDAV: _showWebDAVTab,
+        showDownloader: _showDownloaderTab,
+        showExternalPlayerConsole: _showExternalPlayerConsoleTab,
+      ),
+    );
+    _pages = _pageDefinitions
+        .map((page) => page.build(context, AppDisplaySurface.desktopTablet))
+        .toList(growable: false);
   }
 
   int _getInitialTabIndex() {
@@ -1328,16 +1318,17 @@ class MainPageState extends State<MainPage>
     return _tabIndexForName(defaultTab);
   }
 
-  void _rebuildTabController({int? targetIndex}) {
-    final currentIndex = targetIndex ?? globalTabController?.index ?? 0;
+  void _rebuildTabController({String? targetPageId}) {
+    final currentPageId = targetPageId ?? _selectedPageId;
     globalTabController?.removeListener(_onTabChange);
     globalTabController?.dispose();
 
     final tabLength = _pages.length;
+    final requestedIndex = appPageIndexById(_pageDefinitions, currentPageId);
     globalTabController = TabController(
       length: tabLength,
       vsync: this,
-      initialIndex: currentIndex.clamp(0, tabLength - 1),
+      initialIndex: requestedIndex < 0 ? 0 : requestedIndex,
     );
     globalTabController?.addListener(_onTabChange);
 
@@ -1345,100 +1336,8 @@ class MainPageState extends State<MainPage>
   }
 
   int _tabIndexForName(String tabName) {
-    final hasWebDAVTab = _showWebDAVTab;
-    switch (tabName) {
-      case WebDAVQuickAccessProvider.tabHome:
-        return 0;
-      case WebDAVQuickAccessProvider.tabVideo:
-        return 1;
-      case WebDAVQuickAccessProvider.tabWebDAV:
-        return hasWebDAVTab ? 2 : 0;
-      case WebDAVQuickAccessProvider.tabMediaLibrary:
-        return hasWebDAVTab ? 3 : 2;
-      case WebDAVQuickAccessProvider.tabTorrent:
-        if (!_showDownloaderTab) return 0;
-        return hasWebDAVTab ? 4 : 3;
-      case WebDAVQuickAccessProvider.tabAccount:
-        if (!_showDownloaderTab) {
-          return hasWebDAVTab ? 4 : 3;
-        }
-        return hasWebDAVTab ? 5 : 4;
-      default:
-        return 0;
-    }
-  }
-
-  int _normalizeTabIndex(int requestedIndex) {
-    if (!_showDownloaderTab && requestedIndex == tabTorrentDownload) {
-      return 0;
-    }
-    if (!_showDownloaderTab && requestedIndex > tabTorrentDownload) {
-      requestedIndex -= 1;
-    }
-    if (_showWebDAVTab && requestedIndex >= 2) {
-      return requestedIndex + 1;
-    }
-    final maxIndex = _pages.length - 1;
-    return requestedIndex.clamp(0, maxIndex).toInt();
-  }
-
-  int _remapIndexForDownloaderToggle({
-    required int? currentIndex,
-    required bool oldShowDownloaderTab,
-    required bool newShowDownloaderTab,
-  }) {
-    if (currentIndex == null) {
-      return _getInitialTabIndex();
-    }
-    if (oldShowDownloaderTab == newShowDownloaderTab) {
-      return currentIndex;
-    }
-    if (newShowDownloaderTab) {
-      final insertedIndex = _showWebDAVTab ? 4 : 3;
-      if (currentIndex >= insertedIndex) return currentIndex + 1;
-      return currentIndex;
-    }
-    final downloaderIndex = _showWebDAVTab ? 4 : 3;
-    if (currentIndex == downloaderIndex) {
-      return 0;
-    }
-    if (currentIndex > downloaderIndex) {
-      return currentIndex - 1;
-    }
-    return currentIndex;
-  }
-
-  int _remapIndexForWebDAVToggle({
-    required int? currentIndex,
-    required bool oldShowWebDAVTab,
-    required bool newShowWebDAVTab,
-  }) {
-    if (currentIndex == null) {
-      return _getInitialTabIndex();
-    }
-    if (oldShowWebDAVTab == newShowWebDAVTab) {
-      return currentIndex;
-    }
-
-    if (oldShowWebDAVTab && !newShowWebDAVTab) {
-      if (currentIndex == 2) {
-        // WebDAV Tab 被隐藏，回落到首页
-        return 0;
-      }
-      if (currentIndex >= 3) {
-        return currentIndex - 1;
-      }
-      return currentIndex;
-    }
-
-    if (!oldShowWebDAVTab && newShowWebDAVTab) {
-      if (currentIndex >= 2) {
-        return currentIndex + 1;
-      }
-      return currentIndex;
-    }
-
-    return currentIndex;
+    final index = appPageIndexById(_pageDefinitions, tabName);
+    return index < 0 ? 0 : index;
   }
 
   Future<void> _initializeController() async {
@@ -1567,11 +1466,17 @@ class MainPageState extends State<MainPage>
 
   @override
   void dispose() {
+    DesktopPlayerWindowService.instance.removeListener(_manageHotkeys);
     _tabChangeNotifier
         ?.removeListener(_onTabChangeRequested); // Temporarily remove
     _webdavQuickAccessProvider?.removeListener(_onWebDAVSettingsChanged);
     _downloaderSettingsProvider?.removeListener(_onDownloaderSettingsChanged);
     _pluginService?.removeListener(_onDownloaderSettingsChanged);
+    _settingsProvider?.removeListener(
+      _onExternalPlayerConsoleAvailabilityChanged,
+    );
+    ExternalPlayerConsoleService.sessionAvailability
+        .removeListener(_onExternalPlayerConsoleAvailabilityChanged);
     _androidFileAssociationSubscription?.cancel();
     globalTabController?.removeListener(_onTabChange);
     _videoPlayerState?.removeListener(_manageHotkeys);
@@ -1808,86 +1713,100 @@ class MainPageState extends State<MainPage>
         isDesktop ? baseTopPadding : baseTopPadding + mediaPadding.top;
     final double rightPadding =
         isDesktop ? baseRightPadding : baseRightPadding + mediaPadding.right;
-    final content = NipaplayLargeScreenModeScope(
-      isActive: isLargeScreenLayoutActive,
-      child: Stack(
-        children: [
-          // 使用 Selector 只监听需要的状态
-          Selector<VideoPlayerState, bool>(
-            selector: (context, videoState) => videoState.shouldShowAppBar(),
-            builder: (context, shouldShowAppBar, child) {
-              return CustomScaffold(
-                pages: _pages,
-                tabPage: createTabLabels(
-                  context,
-                  showWebDAVTab: _showWebDAVTab,
-                  showDownloaderTab: _showDownloaderTab,
+    final content = AppNavigationScope(
+      selectedPageId: _selectedPageId,
+      pageIds: _pageDefinitions.map((page) => page.id).toList(growable: false),
+      onSelectPage: _selectPage,
+      child: NipaplayLargeScreenModeScope(
+        isActive: isLargeScreenLayoutActive,
+        child: Stack(
+          children: [
+            // 使用 Selector 只监听需要的状态
+            Selector<VideoPlayerState, bool>(
+              selector: (context, videoState) => videoState.shouldShowAppBar(),
+              builder: (context, shouldShowAppBar, child) {
+                return CustomScaffold(
+                  pages: _pages,
+                  tabPage: createUnifiedTabLabels(context, _pageDefinitions),
+                  pageIsHome: true,
+                  shouldShowAppBar: shouldShowAppBar,
+                  tabController: globalTabController,
+                  useLargeScreenLayout: isLargeScreenLayoutActive,
+                  onToggleLargeScreen: allowLargeScreenControls
+                      ? _toggleLargeScreenLayout
+                      : null,
+                  onToggleThemeFromOrigin: _handleThemeToggleFromButton,
+                  onOpenSettings: () => unawaited(
+                    UnifiedAppViewPresenter.show<void>(
+                      context,
+                      viewId: AppPageIds.settings,
+                    ),
+                  ),
+                );
+              },
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 500),
+              transitionBuilder: (Widget child, Animation<double> animation) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+              child: _showSplash
+                  ? const SplashScreen(key: ValueKey('splash'))
+                  : const SizedBox.shrink(key: ValueKey('no_splash')),
+            ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SizedBox(
+                height: 40,
+                child: GestureDetector(
+                  onDoubleTap: _toggleWindowSize,
+                  onPanStart: (details) async {
+                    if (globals.isDesktop) {
+                      await windowManager.startDragging();
+                    }
+                  },
                 ),
-                pageIsHome: true,
-                shouldShowAppBar: shouldShowAppBar,
-                tabController: globalTabController,
-                useLargeScreenLayout: isLargeScreenLayoutActive,
-                onToggleLargeScreen:
-                    allowLargeScreenControls ? _toggleLargeScreenLayout : null,
-                onToggleThemeFromOrigin: _handleThemeToggleFromButton,
-                onOpenSettings: () => SettingsPage.showWindow(context),
-              );
-            },
-          ),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 500),
-            transitionBuilder: (Widget child, Animation<double> animation) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-            child: _showSplash
-                ? const SplashScreen(key: ValueKey('splash'))
-                : const SizedBox.shrink(key: ValueKey('no_splash')),
-          ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SizedBox(
-              height: 40,
-              child: GestureDetector(
-                onDoubleTap: _toggleWindowSize,
-                onPanStart: (details) async {
-                  if (globals.isDesktop) {
-                    await windowManager.startDragging();
-                  }
-                },
               ),
             ),
-          ),
-          // 使用 Selector 只监听需要的状态
-          Selector<VideoPlayerState, bool>(
-            selector: (context, videoState) => videoState.shouldShowAppBar(),
-            builder: (context, shouldShowAppBar, child) {
-              if (!globals.isDesktopOrTablet) {
-                return const SizedBox.shrink();
-              }
-              if (!isLargeScreenLayoutActive && !shouldShowAppBar) {
-                return const SizedBox.shrink();
-              }
-              return NipaplayLargeScreenModeActionsOverlay(
-                isDarkMode: isDarkMode,
-                isLargeScreenLayoutActive: isLargeScreenLayoutActive,
-                topPadding: topPadding,
-                rightPadding: rightPadding,
-                showWindowsButtons:
-                    !kIsWeb && (Platform.isWindows || Platform.isLinux),
-                isMaximized: isMaximized,
-                onToggleLargeScreen:
-                    allowLargeScreenControls ? _toggleLargeScreenLayout : null,
-                onToggleThemeFromOrigin: _handleThemeToggleFromButton,
-                onOpenSettings: () => SettingsPage.showWindow(context),
-                onMinimize: _minimizeWindow,
-                onMaximizeRestore: _toggleWindowSize,
-                onClose: _closeWindow,
-              );
-            },
-          ),
-        ],
+            // 使用 Selector 只监听需要的状态
+            Selector<VideoPlayerState, bool>(
+              selector: (context, videoState) => videoState.shouldShowAppBar(),
+              builder: (context, shouldShowAppBar, child) {
+                if (!globals.isDesktopOrTablet) {
+                  return const SizedBox.shrink();
+                }
+                if (!isLargeScreenLayoutActive && !shouldShowAppBar) {
+                  return const SizedBox.shrink();
+                }
+                return NipaplayLargeScreenModeActionsOverlay(
+                  isDarkMode: isDarkMode,
+                  isLargeScreenLayoutActive: isLargeScreenLayoutActive,
+                  topPadding: topPadding,
+                  rightPadding: rightPadding,
+                  showWindowsButtons: !kIsWeb &&
+                      (Platform.isWindows || Platform.isLinux) &&
+                      !isLargeScreenLayoutActive,
+                  isMaximized: isMaximized,
+                  onToggleLargeScreen: allowLargeScreenControls
+                      ? _toggleLargeScreenLayout
+                      : null,
+                  onToggleThemeFromOrigin: _handleThemeToggleFromButton,
+                  onOpenSettings: () => unawaited(
+                    UnifiedAppViewPresenter.show<void>(
+                      context,
+                      viewId: AppPageIds.settings,
+                    ),
+                  ),
+                  onMinimize: _minimizeWindow,
+                  onMaximizeRestore: _toggleWindowSize,
+                  onClose: _closeWindow,
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
 
@@ -2025,49 +1944,8 @@ Future<void> _showGlobalUploadDialog(BuildContext context) async {
 }
 
 // 导航到特定页面逻辑
-void _navigateToPage(BuildContext context, int pageIndex) {
-  MainPageState? mainPageState = MainPageState.of(context);
-  final resolvedPageIndex = pageIndex;
-  print('[Dart] 准备导航到页面索引: $resolvedPageIndex');
-
-  // 尝试获取MainPageState
-  if (mainPageState != null && mainPageState.globalTabController != null) {
-    if (mainPageState.globalTabController!.index != resolvedPageIndex) {
-      final enablePageAnimation =
-          context.read<AppearanceSettingsProvider>().enablePageAnimation;
-      if (enablePageAnimation) {
-        mainPageState.globalTabController!.animateTo(resolvedPageIndex);
-      } else {
-        mainPageState.globalTabController!.index = resolvedPageIndex;
-      }
-      debugPrint(
-          '[Dart - _navigateToPage] 直接切换到标签页$resolvedPageIndex (动画: $enablePageAnimation)');
-    } else {
-      debugPrint(
-          '[Dart - _navigateToPage] globalTabController已经在索引$resolvedPageIndex，无需切换');
-    }
-  } else {
-    debugPrint(
-        '[Dart - _navigateToPage] 无法找到MainPageState或globalTabController');
-    // 如果直接访问失败，使用TabChangeNotifier作为备选方案
-    Provider.of<TabChangeNotifier>(context, listen: false).changeTab(pageIndex);
-    debugPrint(
-        '[Dart - _navigateToPage] 备选方案: 使用TabChangeNotifier请求切换到标签页$pageIndex');
-  }
-}
-
-int _resolveRequestedPageIndex({
-  required int requestedIndex,
-  required int? tabLength,
-}) {
-  if (requestedIndex < 2) {
-    return requestedIndex;
-  }
-  // Material 首页：开启 WebDAV 后，WebDAV 插在视频播放和媒体库之间。
-  if (tabLength == 6) {
-    return requestedIndex + 1;
-  }
-  return requestedIndex;
+void _navigateToPage(BuildContext context, String pageId) {
+  context.read<TabChangeNotifier>().changePage(pageId);
 }
 
 Brightness _resolveEffectiveBrightness(

@@ -4,6 +4,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:nipaplay/constants/danmaku/mode.dart';
+import 'package:nipaplay/utils/danmaku/style.dart';
 // import 'package:fvp/mdk.dart';  // Commented out
 import '../player_abstraction/player_abstraction.dart'; // <-- NEW IMPORT
 import '../player_abstraction/player_factory.dart';
@@ -19,17 +21,18 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:http/http.dart' as http;
 import 'package:nipaplay/utils/storage_service.dart';
 import 'package:path/path.dart' as p;
 
 import 'globals.dart' as globals;
 import 'dart:convert';
 import 'package:nipaplay/services/dandanplay_service.dart';
+import 'package:nipaplay/services/bangumi_service.dart';
 import 'package:nipaplay/services/manual_danmaku_matcher.dart';
 import 'package:nipaplay/services/auto_sync_service.dart'; // 导入自动云同步服务
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/services/emby_media_source_selection.dart';
 import 'package:nipaplay/services/subtitle_service.dart';
 import 'package:nipaplay/services/webdav_service.dart';
 import 'package:nipaplay/services/jellyfin_playback_sync_service.dart';
@@ -38,7 +41,6 @@ import 'package:nipaplay/services/shared_remote_playback_sync_service.dart';
 import 'package:nipaplay/services/web_remote_history_sync_service.dart';
 import 'package:nipaplay/services/timeline_danmaku_service.dart'; // 导入时间轴弹幕服务
 import 'package:nipaplay/services/danmaku_spoiler_filter_service.dart';
-import 'package:nipaplay/services/web_remote_access_service.dart';
 import 'package:nipaplay/services/player_remote_control_bridge.dart';
 import 'media_info_helper.dart';
 import 'package:nipaplay/services/danmaku_cache_manager.dart';
@@ -46,6 +48,8 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
 import 'package:nipaplay/models/danmaku_auto_load_strategy.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
+import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/models/playback_detail_context.dart';
 import 'package:nipaplay/models/watch_history_database.dart'; // 导入观看记录数据库
 import 'package:image/image.dart' as img;
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
@@ -60,6 +64,7 @@ import 'package:nipaplay/services/security_bookmark_service.dart';
 import 'package:nipaplay/services/photo_library_service.dart';
 import 'package:provider/provider.dart';
 import '../providers/watch_history_provider.dart';
+import '../providers/settings_provider.dart';
 import 'danmaku_parser.dart';
 import 'danmaku_xml_utils.dart';
 import 'package:nipaplay/cpp_native/bindings/danmaku_parser.dart';
@@ -76,11 +81,9 @@ import 'subtitle_language_utils.dart';
 import 'package:nipaplay/services/file_picker_service.dart'; // Added import for FilePickerService
 import 'package:nipaplay/utils/system_resource_monitor.dart';
 import 'package:nipaplay/providers/ui_theme_provider.dart';
-import 'package:nipaplay/themes/cupertino/widgets/player/cupertino_brightness_indicator.dart';
-import 'package:nipaplay/themes/cupertino/widgets/player/cupertino_volume_indicator.dart';
-import 'package:nipaplay/themes/cupertino/widgets/player/cupertino_seek_indicator.dart';
 import 'decoder_manager.dart'; // 导入解码器管理器
 import 'package:nipaplay/services/episode_navigation_service.dart'; // 导入剧集导航服务
+import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/services/auto_next_episode_service.dart';
 import 'screen_orientation_manager.dart';
 import 'anime4k_shader_manager.dart';
@@ -115,10 +118,6 @@ enum SubtitleStyleOverrideMode { auto, none, scale, force }
 enum SubtitleAlignX { left, center, right }
 
 enum SubtitleAlignY { top, center, bottom }
-
-enum DanmakuOutlineStyle { none, stroke, uniform }
-
-enum DanmakuShadowStyle { none, soft, medium, strong }
 
 enum PlayerStatus {
   idle, // 空闲状态
@@ -240,13 +239,21 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   late Player player; // 改为 late 修饰，使用 Player.create() 方法创建
   BuildContext? _context;
   bool _isDisposed = false;
+  bool _isBackgroundDanmakuLoading = false;
+  int _playbackGeneration = 0;
 
   void _notifyListeners() {
+    if (_isDisposed) {
+      return;
+    }
     notifyListeners();
   }
 
   StreamSubscription? _playerKernelChangeSubscription; // 播放器内核切换事件订阅
   StreamSubscription? _danmakuKernelChangeSubscription; // 弹幕内核切换事件订阅
+  int _playerKernelSwapRequested = 0;
+  int _playerKernelSwapApplied = 0;
+  Future<void>? _playerKernelSwapDrain;
   PlayerStatus _status = PlayerStatus.idle;
   List<String> _statusMessages = []; // 修改为列表存储多个状态消息
   bool _showControls = true;
@@ -257,8 +264,6 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   final String _instantHidePlayerUiEnabledKey =
       'instant_hide_player_ui_enabled';
   bool _instantHidePlayerUiEnabled = false; // 默认关闭（桌面端）
-  final String _playerTopSendDanmakuButtonVisibleKey =
-      'player_top_send_danmaku_button_visible';
   final String _playerTopSkipButtonVisibleKey =
       'player_top_skip_button_visible';
   final String _playerTopResizeButtonVisibleKey =
@@ -367,7 +372,6 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   bool _minimalProgressBarEnabled = false; // 默认关闭
   final String _minimalProgressBarColorKey = 'minimal_progress_bar_color';
   int _minimalProgressBarColor = 0xFFFF7274; // 默认颜色 #ff7274
-  final String _showDanmakuDensityChartKey = 'show_danmaku_density_chart';
   bool _showDanmakuDensityChart = false; // 默认关闭弹幕密度曲线图
   final String _precacheBufferSizeMbKey = 'player_precache_buffer_size_mb';
   int _precacheBufferSizeMb = PlayerFactory.defaultPrecacheBufferSizeMb;
@@ -406,15 +410,10 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   PlayerKernelType? _timelinePreviewPlayerKernel;
   String? _timelinePreviewPlayerSource;
   Future<void> _timelinePreviewSerialTask = Future.value();
-  final String _danmakuOpacityKey = 'danmaku_opacity';
   double _danmakuOpacity = 1.0; // 默认透明度
-  final String _danmakuVisibleKey = 'danmaku_visible';
   bool _danmakuVisible = true; // 默认显示弹幕
-  final String _mergeDanmakuKey = 'merge_danmaku';
   bool _mergeDanmaku = false; // 默认不合并弹幕
-  final String _danmakuStackingKey = 'danmaku_stacking';
   bool _danmakuStacking = false; // 默认不启用弹幕堆叠
-  final String _danmakuRandomColorEnabledKey = 'danmaku_random_color_enabled';
   bool _danmakuRandomColorEnabled = false; // 默认关闭随机染色
 
   final String _anime4kProfileKey = 'anime4k_profile';
@@ -445,19 +444,14 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   List<String> _crtShaderPaths = const <String>[];
 
   // 弹幕类型屏蔽
-  final String _blockTopDanmakuKey = 'block_top_danmaku';
-  final String _blockBottomDanmakuKey = 'block_bottom_danmaku';
-  final String _blockScrollDanmakuKey = 'block_scroll_danmaku';
   bool _blockTopDanmaku = false; // 默认不屏蔽顶部弹幕
   bool _blockBottomDanmaku = false; // 默认不屏蔽底部弹幕
   bool _blockScrollDanmaku = false; // 默认不屏蔽滚动弹幕
 
   // 时间轴告知弹幕轨道状态
-  final String _timelineDanmakuEnabledKey = 'timeline_danmaku_enabled';
   bool _isTimelineDanmakuEnabled = true;
 
   // 弹幕屏蔽词
-  final String _danmakuBlockWordsKey = 'danmaku_block_words';
   List<String> _danmakuBlockWords = []; // 弹幕屏蔽词列表
   List<String> _pluginDanmakuBlockWords = [];
   VoidCallback? _pluginServiceListener;
@@ -465,7 +459,6 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   int _totalDanmakuCount = 0; // 添加一个字段来存储总弹幕数
 
   // 防剧透模式
-  final String _spoilerPreventionEnabledKey = 'spoiler_prevention_enabled';
   bool _spoilerPreventionEnabled = false;
   bool _isSpoilerDanmakuAnalyzing = false;
   String? _spoilerDanmakuAnalysisHash;
@@ -478,40 +471,26 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   String? _spoilerDanmakuPendingTargetVideoPath;
 
   // 防剧透 AI 设置
-  final String _spoilerAiUseCustomKeyKey = 'spoiler_ai_use_custom_key';
   bool _spoilerAiUseCustomKey = true; // 兼容旧设置，固定为自定义接口
-  final String _spoilerAiApiFormatKey = 'spoiler_ai_api_format';
   SpoilerAiApiFormat _spoilerAiApiFormat = SpoilerAiApiFormat.openai;
-  final String _spoilerAiApiUrlKey = 'spoiler_ai_api_url';
   String _spoilerAiApiUrl = '';
-  final String _spoilerAiApiKeyKey = 'spoiler_ai_api_key';
   String _spoilerAiApiKey = '';
-  final String _spoilerAiModelKey = 'spoiler_ai_model';
   String _spoilerAiModel = 'gpt-5';
-  final String _spoilerAiTemperatureKey = 'spoiler_ai_temperature';
   double _spoilerAiTemperature = 0.5;
-  final String _spoilerAiDebugPrintResponseKey =
-      'spoiler_ai_debug_print_response';
   bool _spoilerAiDebugPrintResponse = false;
 
   // 弹幕字体大小设置
-  final String _danmakuFontSizeKey = 'danmaku_font_size';
   double _danmakuFontSize = 0.0; // 默认为0表示使用系统默认值
   Timer? _danmakuFontSizePersistenceTimer;
-  final String _danmakuFontFilePathKey = 'danmaku_font_file_path';
   String _danmakuFontFilePath = '';
-  final String _danmakuFontFamilyKey = 'danmaku_font_family';
   String _danmakuFontFamily = '';
-  final String _danmakuOutlineStyleKey = 'danmaku_outline_style';
   DanmakuOutlineStyle _danmakuOutlineStyle = globals.isMobilePlatform
       ? DanmakuOutlineStyle.stroke
       : DanmakuOutlineStyle.uniform;
-  final String _danmakuShadowStyleKey = 'danmaku_shadow_style';
   DanmakuShadowStyle _danmakuShadowStyle = globals.isMobilePlatform
       ? DanmakuShadowStyle.none
       : DanmakuShadowStyle.strong;
-  final String _next2DanmakuOutlineWidthKey = 'next2_danmaku_outline_width';
-  double _next2DanmakuOutlineWidth = 1.0;
+  double _next2DanmakuOutlineWidth = defaultDanmakuOutlineWidthLevel;
   static const double minSubtitleScale = 0.5;
   static const double maxSubtitleScale = 2.5;
   static const double defaultSubtitleScale = 1.0;
@@ -571,22 +550,18 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   SubtitleStyleOverrideMode _subtitleOverrideMode = defaultSubtitleOverrideMode;
 
   // 弹幕轨道显示区域设置
-  final String _danmakuDisplayAreaKey = 'danmaku_display_area';
   double _danmakuDisplayArea =
       1.0; // 默认全屏显示（0.0=单行，1.0=全屏，0.67=2/3，0.33=1/3，0.25=1/4，0.125=1/8）
 
   // 弹幕速度设置
-  final String _danmakuSpeedMultiplierKey = 'danmaku_speed_multiplier';
   final double _minDanmakuSpeedMultiplier = 0.5;
   final double _maxDanmakuSpeedMultiplier = 2.0;
   final double _baseDanmakuScrollDurationSeconds = 10.0;
   double _danmakuSpeedMultiplier = 1.0; // 默认标准速度
 
   // DFM+ 弹幕轨道间距比例设置
-  final String _danmakuDfmPlusTrackGapKey = 'danmaku_dfm_plus_track_gap';
   double _danmakuDfmPlusTrackGap = 0.15;
 
-  final String _rememberDanmakuOffsetKey = 'remember_danmaku_offset';
   bool _rememberDanmakuOffset = false; // 是否在切换视频时保留手动弹幕偏移
   double _manualDanmakuOffset = 0.0; // 手动设置的弹幕偏移
   double _autoDanmakuOffset = 0.0; // 弹弹Play自动匹配的时间偏移
@@ -633,6 +608,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   int? _episodeId; // 存储从 historyItem 传入的 episodeId
   int? _animeId; // 存储从 historyItem 传入的 animeId
   WatchHistoryItem? _initialHistoryItem; // 记录首次传入的历史记录，便于初始化时复用元数据
+  PlaybackDetailContext? _playbackDetailContext;
 
   // 字幕管理器
   late SubtitleManager _subtitleManager;
@@ -794,7 +770,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   Future<void> _saveDanmakuFontSizePreference(double fontSize) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble(_danmakuFontSizeKey, fontSize);
+      await prefs.setDouble(SettingsKeys.danmakuFontSize, fontSize);
     } catch (e) {
       debugPrint('[VideoPlayerState] 保存弹幕字号失败: $e');
     }
@@ -950,13 +926,19 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   bool get showDanmakuDensityChart => _showDanmakuDensityChart;
   int get precacheBufferSizeMb => _precacheBufferSizeMb;
   int get precacheBufferDurationSeconds => _precacheBufferDurationSeconds;
-  double get danmakuOpacity => _danmakuOpacity;
+  double get danmakuOpacity => _danmakuOpacity; // 获取弹幕透明度
   bool get danmakuVisible => _danmakuVisible;
   bool get mergeDanmaku => _mergeDanmaku;
   double get danmakuFontSize => _danmakuFontSize;
   String get danmakuFontFilePath => _danmakuFontFilePath;
   String get danmakuFontFamily => _danmakuFontFamily;
   DanmakuOutlineStyle get danmakuOutlineStyle => _danmakuOutlineStyle;
+
+  // 弹幕描边是否启用（仅在描边样式不为 none 且描边宽度大于 0 时启用）
+  bool get danmakuOutlineEnabled =>
+      _danmakuOutlineStyle != DanmakuOutlineStyle.none &&
+      _next2DanmakuOutlineWidth > 0.0;
+
   DanmakuShadowStyle get danmakuShadowStyle => _danmakuShadowStyle;
   double get next2DanmakuOutlineWidth => _next2DanmakuOutlineWidth;
   double get subtitleScale => _subtitleScale;
@@ -1306,6 +1288,38 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   String? get episodeTitle => _episodeTitle; // 添加集数标题getter
   int? get animeId => _animeId; // 添加动画ID getter
   int? get episodeId => _episodeId; // 添加剧集ID getter
+  PlaybackDetailContext? get playbackDetailContext => _playbackDetailContext;
+  String? get loadingCoverImageUrl {
+    final animeId = _animeId;
+    if (animeId != null && animeId > 0) {
+      final cachedUrl =
+          BangumiService.instance.getAnimeDetailsFromMemory(animeId)?.imageUrl;
+      if (_isNetworkImageUrl(cachedUrl)) return cachedUrl;
+    }
+
+    final detailUrl = _playbackDetailContext?.imageUrl;
+    if (_isNetworkImageUrl(detailUrl)) return detailUrl;
+    final historyUrl = _initialHistoryItem?.thumbnailPath;
+    return _isNetworkImageUrl(historyUrl) ? historyUrl : null;
+  }
+
+  bool _isNetworkImageUrl(String? value) {
+    final uri = Uri.tryParse(value?.trim() ?? '');
+    return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
+  PlaybackDetailContext? get animeDetailContext {
+    final detailContext = _playbackDetailContext;
+    if (detailContext == null) return null;
+    if (detailContext.isIdentified) return detailContext;
+
+    final matchedAnimeId = _animeId;
+    if (matchedAnimeId == null || matchedAnimeId <= 0) return null;
+    return detailContext.withAnimeMatch(
+      animeId: matchedAnimeId,
+      title: _animeTitle,
+    );
+  }
 
   bool hasJellyfinServerAudioSelection(String itemId) =>
       _jellyfinServerAudioSelections.containsKey(itemId);
@@ -1493,7 +1507,14 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
     _systemVolumeSubscription = null;
     _systemVolumeController?.removeListener();
     _systemVolumeController = null;
-    player.dispose();
+    unawaited(
+      player.disposeAsync().catchError((Object error, StackTrace stackTrace) {
+        debugPrint(
+          '[VideoPlayerState] Native player disposal failed: '
+          '$error\n$stackTrace',
+        );
+      }),
+    );
     _focusNode.dispose();
     _uiUpdateTimer?.cancel(); // 清理UI更新定时器
 
@@ -1561,33 +1582,42 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   @override
   void onWindowEvent(String eventName) {
     if (eventName == 'enter-full-screen' || eventName == 'leave-full-screen') {
-      windowManager.isFullScreen().then((isFullscreen) {
-        if (isFullscreen != _isFullscreen) {
-          _isFullscreen = isFullscreen;
-          notifyListeners();
-        }
-      });
+      unawaited(_refreshFullscreenStateFromWindowManager());
     }
   }
 
   @override
   void onWindowEnterFullScreen() {
-    windowManager.isFullScreen().then((isFullscreen) {
-      if (isFullscreen != _isFullscreen) {
-        _isFullscreen = isFullscreen;
-        notifyListeners();
-      }
-    });
+    unawaited(_refreshFullscreenStateFromWindowManager());
   }
 
   @override
   void onWindowLeaveFullScreen() {
-    windowManager.isFullScreen().then((isFullscreen) {
-      if (!isFullscreen && _isFullscreen) {
-        _isFullscreen = false;
-        notifyListeners();
+    unawaited(
+      _refreshFullscreenStateFromWindowManager(onlyHandleExit: true),
+    );
+  }
+
+  Future<void> _refreshFullscreenStateFromWindowManager({
+    bool onlyHandleExit = false,
+  }) async {
+    try {
+      final isFullscreen = await windowManager.isFullScreen();
+      if (_isDisposed || (onlyHandleExit && isFullscreen)) {
+        return;
       }
-    });
+      if (isFullscreen != _isFullscreen) {
+        _isFullscreen = isFullscreen;
+        _notifyListeners();
+      }
+    } catch (error, stackTrace) {
+      if (!_isDisposed) {
+        debugPrint(
+          '[VideoPlayerState] Failed to refresh desktop fullscreen state: '
+          '$error\n$stackTrace',
+        );
+      }
+    }
   }
 
   @override

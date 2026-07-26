@@ -99,6 +99,7 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
 
     if (videoPath.startsWith('http://') ||
         videoPath.startsWith('https://') ||
+        MediaSourceUtils.isContentUri(videoPath) ||
         videoPath.startsWith('jellyfin://') ||
         videoPath.startsWith('emby://') ||
         SharedRemoteHistoryHelper.isSharedRemoteStreamPath(videoPath)) {
@@ -106,7 +107,11 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
     }
 
     final targetVideoPath = _currentVideoPath;
-    bool canContinue() => !_isDisposed && _currentVideoPath == targetVideoPath;
+    final targetGeneration = _playbackGeneration;
+    bool canContinue() =>
+        !_isDisposed &&
+        _currentVideoPath == targetVideoPath &&
+        _playbackGeneration == targetGeneration;
 
     try {
       final dirPath = p.dirname(videoPath);
@@ -275,7 +280,11 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
   Future<void> loadDanmaku(String episodeId, String animeIdStr) async {
     if (_isDisposed) return;
     final targetVideoPath = _currentVideoPath;
-    bool canContinue() => !_isDisposed && _currentVideoPath == targetVideoPath;
+    final targetGeneration = _playbackGeneration;
+    bool canContinue() =>
+        !_isDisposed &&
+        _currentVideoPath == targetVideoPath &&
+        _playbackGeneration == targetGeneration;
 
     try {
       debugPrint('尝试为episodeId=$episodeId, animeId=$animeIdStr加载弹幕');
@@ -466,7 +475,11 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
       bool setStatusMessage = true}) async {
     if (_isDisposed) return;
     final targetVideoPath = _currentVideoPath;
-    bool canContinue() => !_isDisposed && _currentVideoPath == targetVideoPath;
+    final targetGeneration = _playbackGeneration;
+    bool canContinue() =>
+        !_isDisposed &&
+        _currentVideoPath == targetVideoPath &&
+        _playbackGeneration == targetGeneration;
 
     try {
       debugPrint('开始从本地JSON加载弹幕...');
@@ -526,6 +539,18 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
         'loadTime': DateTime.now(),
       };
       _danmakuTrackEnabled[finalTrackName] = true;
+
+      // 触发弹幕加载完成事件，通知插件（在合并之前，以便插件可以修改数据）
+      if (!canContinue()) return;
+      _notifyPluginDanmakuLoaded(parsedDanmaku);
+
+      // 检查插件是否修改了弹幕数据
+      final pluginModified = _pluginService?.pendingDanmakuData;
+      if (pluginModified != null && pluginModified.isNotEmpty) {
+        _danmakuTracks[finalTrackName]!['danmakuList'] = pluginModified;
+        _danmakuTracks[finalTrackName]!['count'] = pluginModified.length;
+        _pluginService?.updateDanmakuData(null);
+      }
 
       // 重新计算合并后的弹幕列表
       if (!canContinue()) return;
@@ -683,6 +708,126 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
     return exportList;
   }
 
+  /// 为外部播放器弹幕外挂准备过滤后的弹幕列表。
+  ///
+  /// 与 [loadDanmaku] 不同：**不写** [_danmakuTracks]/[_danmakuList]，不影响
+  /// 内置播放器当前状态。流程复用 缓存→网络→解析→插件过滤→屏蔽过滤→随机色，
+  /// 返回与内置显示口径一致的过滤后列表。
+  ///
+  /// 调用方需保证此时内置播放器未在并发加载弹幕（插件过滤用共享 pending 缓冲）。
+  /// 若 [_context]/[_pluginService] 不可用，插件过滤会优雅跳过（屏蔽过滤仍生效）。
+  Future<List<Map<String, dynamic>>> buildFilteredDanmakuForExport({
+    required String episodeId,
+    required String animeId,
+  }) async {
+    debugPrint('[ExtDanmaku] buildFilteredDanmakuForExport 开始: '
+        'episodeId=$episodeId, animeId=$animeId');
+    if (episodeId.isEmpty) {
+      debugPrint('[ExtDanmaku] episodeId 为空，返回空列表');
+      return const [];
+    }
+
+    // 1. 缓存 → 网络
+    List<dynamic>? raw;
+    try {
+      final tCache = DateTime.now();
+      final cached = await DanmakuCacheManager.getDanmakuFromCache(episodeId);
+      debugPrint('[ExtDanmaku] 缓存查询: ${cached?.length ?? 0} 条, '
+          '耗时=${DateTime.now().difference(tCache).inMilliseconds}ms');
+      if (cached != null && cached.isNotEmpty) {
+        final hasSenderMetadata = cached.any((comment) =>
+            comment is Map &&
+            comment['source']?.toString() == 'dandanplay');
+        if (hasSenderMetadata) {
+          raw = cached;
+        } else {
+          debugPrint('[ExtDanmaku] 缓存不含发送者元数据，重新请求网络');
+        }
+      }
+      if (raw == null) {
+        debugPrint('[ExtDanmaku] 缓存未命中，发起网络请求…');
+        final animeIdInt = int.tryParse(animeId) ?? 0;
+        final tNet = DateTime.now();
+        final data = await DandanplayService.getDanmaku(episodeId, animeIdInt)
+            .timeout(const Duration(seconds: 32), onTimeout: () {
+          throw TimeoutException('加载弹幕超时');
+        });
+        debugPrint('[ExtDanmaku] 网络返回: count=${data['count']}, '
+            '耗时=${DateTime.now().difference(tNet).inMilliseconds}ms');
+        final comments = data['comments'];
+        if (comments is List && comments.isNotEmpty) {
+          raw = comments;
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[ExtDanmaku] 取弹幕失败: $e');
+      debugPrintStack(stackTrace: st);
+      return const [];
+    }
+    if (raw == null || raw.isEmpty) {
+      debugPrint('[ExtDanmaku] raw 为空，返回空列表');
+      return const [];
+    }
+
+    // 2. 解析（优先 C++ 解析器，回退 Dart isolate）
+    List<Map<String, dynamic>> parsed;
+    try {
+      final tParse = DateTime.now();
+      parsed = await DanmakuParser.parseDanmakuListOptimized(
+        raw,
+        (data) => compute(parseDanmakuListInBackground, data),
+      );
+      debugPrint('[ExtDanmaku] 解析完成: ${parsed.length} 条, '
+          '耗时=${DateTime.now().difference(tParse).inMilliseconds}ms');
+    } catch (e, st) {
+      debugPrint('[ExtDanmaku] 解析弹幕失败: $e');
+      debugPrintStack(stackTrace: st);
+      return const [];
+    }
+    if (parsed.isEmpty) {
+      debugPrint('[ExtDanmaku] 解析后为空，返回空列表');
+      return const [];
+    }
+
+    // 3. 插件过滤（复用 loadDanmaku 同款管线）
+    final beforePlugin = parsed.length;
+    _notifyPluginDanmakuLoaded(parsed);
+    final pluginModified = _pluginService?.pendingDanmakuData;
+    if (pluginModified != null && pluginModified.isNotEmpty) {
+      parsed = pluginModified;
+      _pluginService?.updateDanmakuData(null);
+      debugPrint('[ExtDanmaku] 插件过滤: $beforePlugin → ${parsed.length} 条');
+    } else {
+      debugPrint('[ExtDanmaku] 插件未修改 (pluginService=${_pluginService != null})');
+    }
+    parsed = parsed.map((item) {
+      final source = item['source']?.toString().trim();
+      if (source != null && source.isNotEmpty) return item;
+      return <String, dynamic>{
+        ...item,
+        'source': 'dandanplay',
+      };
+    }).toList();
+
+    // 4. 屏蔽过滤 + 随机色（复用 _updateMergedDanmakuList 同款谓词）
+    final beforeBlock = parsed.length;
+    final filtered = parsed
+        .where((d) => !shouldBlockDanmaku(d))
+        .map(_prepareDanmakuForDisplay)
+        .toList();
+    debugPrint('[ExtDanmaku] 屏蔽过滤: $beforeBlock → ${filtered.length} 条');
+
+    // 5. 按时间排序
+    filtered.sort((a, b) {
+      final ta = _resolveDanmakuTimeValue(a['time'] ?? a['t']);
+      final tb = _resolveDanmakuTimeValue(b['time'] ?? b['t']);
+      return ta.compareTo(tb);
+    });
+
+    debugPrint('[ExtDanmaku] 完成，返回 ${filtered.length} 条');
+    return filtered;
+  }
+
   String buildDanmakuJsonExport(List<Map<String, dynamic>> danmakuList) {
     final payload = <String, dynamic>{
       'count': danmakuList.length,
@@ -788,15 +933,13 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
     }
 
     final typeText = typeValue?.toString().toLowerCase();
-    switch (typeText) {
-      case 'top':
-        return 5;
-      case 'bottom':
-        return 4;
-      case 'scroll':
-      case 'right':
-      default:
-        return 1;
+    switch (typeText)
+    {
+    case 'top'    : return DanmakuMode.top   .code;
+    case 'bottom' : return DanmakuMode.bottom.code;
+    case 'scroll' : return DanmakuMode.scroll.code;
+    case 'right'  : return DanmakuMode.scroll.code;
+    default       : return DanmakuMode.scroll.code;
     }
   }
 
@@ -1562,7 +1705,7 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_timelineDanmakuEnabledKey, enabled);
+      await prefs.setBool(SettingsKeys.timelineDanmakuEnabled, enabled);
     } catch (e) {
       debugPrint('保存时间轴告知开关失败: $e');
     }

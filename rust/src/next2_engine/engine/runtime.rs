@@ -19,7 +19,10 @@ pub(crate) fn n2log(msg: &str) {
     });
     if let Ok(mut f) = file.lock() {
         let _ = writeln!(f, "[next2] {}", msg);
-        let _ = f.flush();
+        // Don't flush per-call: a synchronous fsync on every log line was a
+        // stall source on the MSDF rasterization hot path (5+ logs per new
+        // glyph). The OS buffers the write and flushes on drop/close. Error
+        // and panic paths still log, just without forcing an fsync.
     }
 }
 
@@ -55,8 +58,8 @@ extern "C" {
 const INITIAL_WIDTH: u32 = 2;
 const INITIAL_HEIGHT: u32 = 2;
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
-const BASE_ATLAS_SIZE: u32 = 4096;
-const MSDF_RANGE: f64 = 6.0;
+const BASE_ATLAS_SIZE: u32 = 8192;
+const MSDF_RANGE: f64 = super::DANMAKU_MSDF_RANGE;
 const MAX_FONT_COLLECTION_FACES: u32 = 32;
 const EDGE_COLORING_CORNER_THRESHOLD: f64 = 0.03;
 const EDGE_COLORING_SEED: u64 = 69441337420;
@@ -68,7 +71,11 @@ const EMOJI_SIDE_BEARING_RATIO: f32 = 0.08;
 const GLYPH_MODE_TEXT: f32 = 0.0;
 const GLYPH_MODE_EMOJI: f32 = 1.0;
 const SHADOW_ALPHA_SCALE: f32 = 1.0;
-const SHADOW_RENDER_SCALE: u32 = 1;
+/// Shadow render texture scale relative to the screen. 0.5 renders the shadow
+/// mask/blur at half resolution (1/4 the pixel area); the shadow is blurred
+/// anyway so the visual difference is negligible while GPU pixel load on the
+/// shadow passes drops ~75%.
+const SHADOW_RENDER_SCALE: f32 = 0.5;
 const MISSING_GLYPH_FALLBACK: char = '□';
 const FALLBACK_GLYPH_ADVANCE_RATIO: f32 = 0.58;
 
@@ -690,6 +697,10 @@ fn run_engine_loop(
     let mut has_pending_frame = false;
 
     while running {
+        // Drain completed async glyph prefetches before any command/draw this
+        // iteration, so prefetched glyphs land in the atlas before they're
+        // needed by `draw_to_present`. Non-blocking; cheap when empty.
+        renderer.drain_prefetch(ctx.queue.as_ref());
         let mut received_command = false;
 
         loop {

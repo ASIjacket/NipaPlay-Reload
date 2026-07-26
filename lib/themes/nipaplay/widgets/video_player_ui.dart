@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,9 @@ import 'package:nipaplay/widgets/context_menu/context_menu.dart';
 import 'package:nipaplay/widgets/danmaku_overlay.dart';
 import 'package:nipaplay/widgets/external_subtitle_overlay.dart';
 import 'package:nipaplay/widgets/macos_native_video_view.dart';
+import 'package:nipaplay/widgets/desktop_transient_overlay.dart';
+import 'package:nipaplay/widgets/desktop_picture_in_picture_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/themed_anime_detail.dart';
 import 'package:provider/provider.dart';
 import 'brightness_gesture_area.dart';
 import 'volume_gesture_area.dart';
@@ -27,14 +31,20 @@ import 'loading_overlay.dart';
 import 'macos_hdr_probe_overlay.dart';
 import 'vertical_indicator.dart';
 import 'video_upload_ui.dart';
+import 'base_settings_menu.dart';
 import 'playback_info_menu.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 class VideoPlayerUI extends StatefulWidget {
   final Widget? emptyPlaceholder;
+  final double danmakuScale;
 
-  const VideoPlayerUI({super.key, this.emptyPlaceholder});
+  const VideoPlayerUI({
+    super.key,
+    this.emptyPlaceholder,
+    this.danmakuScale = 1.0,
+  });
 
   @override
   State<VideoPlayerUI> createState() => _VideoPlayerUIState();
@@ -55,6 +65,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
   Timer? _doubleTapTimer;
   Timer? _mouseMoveTimer;
   OverlayEntry? _playbackInfoOverlay;
+  DesktopTransientOverlay? _playbackInfoPopup;
   int _tapCount = 0;
   static const _phoneDoubleTapTimeout = Duration(milliseconds: 360);
   static const _desktopDoubleTapTimeout = Duration(milliseconds: 220);
@@ -105,7 +116,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
         currentPosition: videoState.playbackTimeMs.value,
         videoDuration: videoState.videoDuration.inMilliseconds.toDouble(),
         isPlaying: videoState.status == PlayerStatus.playing,
-        fontSize: getFontSize(videoState),
+        fontSize: getFontSize(videoState) * widget.danmakuScale,
         isVisible: videoState.danmakuVisible,
         opacity: videoState.mappedDanmakuOpacity,
       ),
@@ -120,7 +131,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
           currentPosition: posMs,
           videoDuration: videoState.videoDuration.inMilliseconds.toDouble(),
           isPlaying: videoState.status == PlayerStatus.playing,
-          fontSize: getFontSize(videoState),
+          fontSize: getFontSize(videoState) * widget.danmakuScale,
           isVisible: videoState.danmakuVisible,
           opacity: videoState.mappedDanmakuOpacity,
         );
@@ -307,16 +318,18 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
 
   Widget _buildVideoSurfaceStage(VideoPlayerState videoState, int? textureId) {
     if (_shouldUseWindowHostedVideoOverlay(videoState)) {
-      // iOS only: the native plane must not extend under the notch, so we
-      // letterbox the video into a centered safe-area sub-rect here and keep
-      // the surroundings transparent; Erika owns the black window background,
-      // which shows through as the bars.
+      // iOS only: the window-overlay plane mirrors this Flutter rect, so keep
+      // it sized to the video aspect ratio and centered. This preserves the
+      // iPhone notch-safe path and keeps iPad video from anchoring at the
+      // top-left of a full-bleed native plane.
       //
-      // macOS keeps the full-bleed surface: there is no notch and Erika
-      // letterboxes natively into a full-screen plane. Flutter must NOT shrink
-      // the plane or paint around it, or the app UI behind shows through the
-      // (now transparent) bars.
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      // macOS keeps the full-bleed surface: Erika letterboxes natively into
+      // the reserved plane. Flutter must NOT shrink the plane or paint around
+      // it, or the app UI behind shows through the transparent bars.
+      final useLegacyIosAspectSurface = !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.iOS &&
+          Platform.environment['NIPAPLAY_IOS_ERIKA_ASPECT_SURFACE'] == '1';
+      if (useLegacyIosAspectSurface) {
         return Center(
           child: AspectRatio(
             aspectRatio: videoState.aspectRatio,
@@ -766,7 +779,31 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
   }
 
   void _showPlaybackInfoOverlay() {
-    if (_playbackInfoOverlay != null) return;
+    if (_playbackInfoOverlay != null || _playbackInfoPopup != null) return;
+
+    if (DesktopMultiWindow.isSecondaryWindow(context)) {
+      final viewSize = MediaQuery.sizeOf(context);
+      final popup = DesktopTransientOverlay.showPopup(
+        context: context,
+        anchorRect: Rect.fromLTWH(
+          viewSize.width - 40,
+          viewSize.height - 72,
+          1,
+          1,
+        ),
+        size: const Size(360, 600),
+        placement: DesktopTransientWindowPlacement.above,
+        contentBuilder: (_, close) => SettingsMenuScope(
+          standaloneWindow: true,
+          child: PlaybackInfoMenu(onClose: close),
+        ),
+        onClosed: () => _playbackInfoPopup = null,
+      );
+      if (popup != null) {
+        _playbackInfoPopup = popup;
+        return;
+      }
+    }
 
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return;
@@ -790,6 +827,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
   }
 
   void _hidePlaybackInfoOverlay() {
+    _playbackInfoPopup?.close();
+    _playbackInfoPopup = null;
     _playbackInfoOverlay?.remove();
     _playbackInfoOverlay = null;
   }
@@ -827,6 +866,22 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
     }
   }
 
+  Future<void> _showAnimeDetail(VideoPlayerState videoState) async {
+    final detailContext = videoState.animeDetailContext;
+    if (detailContext == null) return;
+
+    try {
+      await ThemedAnimeDetail.show(
+        context,
+        detailContext.animeId ?? 0,
+        playbackDetailContext: detailContext,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      BlurSnackBar.show(context, '打开番剧详情失败: $e');
+    }
+  }
+
   List<ContextMenuAction> _buildContextMenuActions(
     VideoPlayerState videoState,
   ) {
@@ -843,6 +898,12 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
         enabled: videoState.canPlayNextEpisode,
         onPressed: () => unawaited(videoState.playNextEpisode()),
       ),
+      if (videoState.animeDetailContext != null)
+        ContextMenuAction(
+          icon: Icons.movie_outlined,
+          label: '番剧详情',
+          onPressed: () => unawaited(_showAnimeDetail(videoState)),
+        ),
       ContextMenuAction(
         icon: Icons.fast_forward_rounded,
         label: '快进 ${videoState.seekStepDisplayLabel}',
@@ -911,6 +972,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
 
   @override
   Widget build(BuildContext context) {
+    final isPictureInPicture =
+        DesktopPictureInPictureScope.isEnabledOf(context);
     return Consumer<VideoPlayerState>(
       builder: (context, videoState, child) {
         return ValueListenableBuilder<int?>(
@@ -940,6 +1003,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                       episodeTitle: videoState.episodeTitle,
                       fileName: videoState.currentVideoPath?.split('/').last,
                       animeId: videoState.animeId,
+                      coverImageUrl: videoState.loadingCoverImageUrl,
                     ),
                 ],
               );
@@ -967,7 +1031,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: _handleTap,
-                      onSecondaryTapDown: globals.isDesktop
+                      onSecondaryTapDown: globals.isDesktop &&
+                              !isPictureInPicture
                           ? (details) {
                               if (!videoState.hasVideo) return;
                               _hidePlaybackInfoOverlay();
@@ -1061,6 +1126,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                               ?.split('/')
                                               .last,
                                           animeId: videoState.animeId,
+                                          coverImageUrl:
+                                              videoState.loadingCoverImageUrl,
                                         ),
                                       ),
                                     if (videoState.hasVideo)
@@ -1073,8 +1140,10 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                       const BrightnessGestureArea(),
                                     if (videoState.hasVideo)
                                       const VolumeGestureArea(),
-                                    const MinimalProgressBar(),
-                                    const DanmakuDensityBar(),
+                                    if (!isPictureInPicture) ...[
+                                      const MinimalProgressBar(),
+                                      const DanmakuDensityBar(),
+                                    ],
                                   ],
                                 ),
                               )
@@ -1146,6 +1215,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                                 ?.split('/')
                                                 .last,
                                             animeId: videoState.animeId,
+                                            coverImageUrl:
+                                                videoState.loadingCoverImageUrl,
                                           ),
                                         ),
                                       if (videoState.hasVideo)
@@ -1163,11 +1234,14 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                                 _macosNativeVideoViewId!,
                                           ),
                                         ),
-                                      if (videoState
-                                          .desktopHoverSettingsMenuEnabled)
+                                      if (!isPictureInPicture &&
+                                          videoState
+                                              .desktopHoverSettingsMenuEnabled)
                                         const RightEdgeHoverMenu(),
-                                      const MinimalProgressBar(),
-                                      const DanmakuDensityBar(),
+                                      if (!isPictureInPicture) ...[
+                                        const MinimalProgressBar(),
+                                        const DanmakuDensityBar(),
+                                      ],
                                     ],
                                   ),
                                 ),

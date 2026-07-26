@@ -7,6 +7,25 @@ import './player_data_models.dart';
 import 'dart:async';
 import 'package:nipaplay/utils/subtitle_font_loader.dart';
 
+@visibleForTesting
+void applyMdkUserAgentProperties(
+  void Function(String key, String value) setter,
+  String userAgent,
+) {
+  setter('avformat.user_agent', userAgent);
+  setter('avio.user_agent', userAgent);
+}
+
+@visibleForTesting
+void applyMdkHttpProxyProperties(
+  void Function(String key, String value) setter,
+  String httpProxy,
+) {
+  if (httpProxy.isEmpty) return;
+  setter('avformat.http_proxy', httpProxy);
+  setter('avio.http_proxy', httpProxy);
+}
+
 // Enum Converters
 PlayerPlaybackState _toPlayerPlaybackState(mdk.PlaybackState state) {
   if (state == mdk.PlaybackState.stopped) return PlayerPlaybackState.stopped;
@@ -56,7 +75,8 @@ mdk.MediaType _fromPlayerMediaType(PlayerMediaType type) {
   }
 }
 
-PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo, {int internalAudioTrackCount = 0}) {
+PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo,
+    {int internalAudioTrackCount = 0}) {
   return PlayerMediaInfo(
     duration: mdkInfo.duration,
     video: mdkInfo.video?.map((v) {
@@ -161,7 +181,8 @@ PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo, {int internalAudioTrac
         language: language ?? 'unknown',
         metadata: metadata,
         rawRepresentation: rawRepresentation,
-        isExternal: internalAudioTrackCount > 0 && trackIndex >= internalAudioTrackCount,
+        isExternal: internalAudioTrackCount > 0 &&
+            trackIndex >= internalAudioTrackCount,
       );
     }).toList(),
   );
@@ -176,8 +197,10 @@ class MdkPlayerAdapter implements AbstractPlayer {
   String? _activeVideoDecoder;
   String? _activeAudioDecoder;
   int _internalAudioTrackCount = 0; // 内部音频轨道数，用于区分外挂MKA轨道
+  final String _httpProxy;
 
-  MdkPlayerAdapter() {
+  MdkPlayerAdapter({String? httpProxy})
+      : _httpProxy = (httpProxy ?? '').trim() {
     _mdkPlayer = mdk.Player();
     _attachMdkEventListeners();
     _applyInitialSettings();
@@ -215,6 +238,7 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   void _applyInitialSettings() {
     try {
+      applyMdkHttpProxyProperties(_setStickyProperty, _httpProxy);
       _setStickyProperty('auto_load', '0');
       _setStickyProperty('subtitle', '1');
       // 重新应用播放速度设置
@@ -346,7 +370,8 @@ class MdkPlayerAdapter implements AbstractPlayer {
   }
 
   @override
-  PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo, internalAudioTrackCount: _internalAudioTrackCount);
+  PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo,
+      internalAudioTrackCount: _internalAudioTrackCount);
 
   @override
   List<int> get activeSubtitleTracks => _mdkPlayer.activeSubtitleTracks;
@@ -504,6 +529,12 @@ class MdkPlayerAdapter implements AbstractPlayer {
         return _activeAudioDecoder;
     }
     return _mdkPlayer.getProperty(key);
+  }
+
+  @override
+  void setUserAgent(String ua) {
+    applyMdkUserAgentProperties(setProperty, ua);
+    debugPrint('MDK: 已设置 user-agent: ${ua.isEmpty ? "(默认)" : ua}');
   }
 
   @override

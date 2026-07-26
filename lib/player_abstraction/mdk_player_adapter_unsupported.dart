@@ -5,8 +5,8 @@ import './player_data_models.dart';
 import 'dart:async';
 
 class MdkPlayerAdapter implements AbstractPlayer {
-  MdkPlayerAdapter();
-  
+  MdkPlayerAdapter({String? httpProxy});
+
   @override
   double get volume => 1.0;
   @override
@@ -75,7 +75,7 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   void setDecoders(PlayerMediaType type, List<String> decoders) {}
-  
+
   @override
   List<String> getDecoders(PlayerMediaType type) => [];
 
@@ -86,6 +86,9 @@ class MdkPlayerAdapter implements AbstractPlayer {
   void setProperty(String key, String value) {}
 
   @override
+  void setUserAgent(String ua) {}
+
+  @override
   Future<void> setVideoSurfaceSize({int? width, int? height}) async {}
 
   @override
@@ -93,7 +96,7 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   Future<void> playDirectly() async {}
-  
+
   @override
   Future<void> pauseDirectly() async {}
 

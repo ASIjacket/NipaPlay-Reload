@@ -13,6 +13,7 @@ import 'debug_log_service.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
 import 'package:nipaplay/services/emby_transcode_manager.dart';
 import 'package:nipaplay/services/media_server_playback_client.dart';
+import 'package:nipaplay/services/media_server_image_loader.dart';
 import 'media_server_service_base.dart';
 
 class EmbyService extends MediaServerServiceBase
@@ -202,7 +203,11 @@ class EmbyService extends MediaServerServiceBase
   @override
   String? get serverUrl => _serverUrl;
   @override
-  set serverUrl(String? value) => _serverUrl = value;
+  set serverUrl(String? value) {
+    _serverUrl = value;
+    setMediaServerBaseUrl('emby', value);
+  }
+
   @override
   String? get username => _username;
   @override
@@ -335,8 +340,15 @@ class EmbyService extends MediaServerServiceBase
       return trimmed;
     }
 
-    String normalized = trimmed.startsWith('/') ? trimmed : '/$trimmed';
-    if (!normalized.toLowerCase().startsWith('/emby')) {
+    bool bypassEmby = false;
+    String cleanPath = trimmed;
+    if (trimmed.startsWith('[no-emby]')) {
+      bypassEmby = true;
+      cleanPath = trimmed.substring('[no-emby]'.length);
+    }
+
+    String normalized = cleanPath.startsWith('/') ? cleanPath : '/$cleanPath';
+    if (!bypassEmby && !normalized.toLowerCase().startsWith('/emby')) {
       normalized = '/emby$normalized';
     }
 
@@ -361,12 +373,46 @@ class EmbyService extends MediaServerServiceBase
     if (!_isConnected || _userId == null) return;
 
     try {
-      final response =
-          await _makeAuthenticatedRequest('/emby/Library/MediaFolders');
+      List<dynamic>? items;
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final items = data['Items'] as List;
+      // Helper function to safely fetch items from a given path
+      Future<List<dynamic>?> fetchItemsFromPath(String path) async {
+        try {
+          final response = await _makeAuthenticatedRequest(path);
+          if (response.statusCode != 200) {
+            return null;
+          }
+          final contentType = response.headers['content-type'] ?? '';
+          if (contentType.toLowerCase().contains('text/html')) {
+            return null;
+          }
+          final data = json.decode(response.body);
+          if (data is Map && data.containsKey('Items')) {
+            final list = data['Items'];
+            if (list is List && list.isNotEmpty) {
+              return list;
+            }
+          }
+        } catch (e) {
+          DebugLogService().addLog('EmbyService: 获取媒体库路径 ($path) 失败: $e');
+        }
+        return null;
+      }
+
+      // 1. Try requesting '/emby/Library/MediaFolders'
+      items = await fetchItemsFromPath('/emby/Library/MediaFolders');
+
+      // 2. Try requesting '/emby/Users/{userId}/Views'
+      if (items == null || items.isEmpty) {
+        items = await fetchItemsFromPath('/emby/Users/$_userId/Views');
+      }
+
+      // 3. Try requesting '/Users/{userId}/Views' (without /emby prefix)
+      if (items == null || items.isEmpty) {
+        items = await fetchItemsFromPath('[no-emby]/Users/$_userId/Views');
+      }
+
+      if (items != null) {
         final List<EmbyLibrary> tempLibraries = [];
 
         for (var item in items) {
@@ -409,7 +455,7 @@ class EmbyService extends MediaServerServiceBase
         }
         _availableLibraries = tempLibraries;
       } else {
-        print('Error response: ${response.statusCode} - ${response.body}');
+        DebugLogService().addLog('EmbyService: 所有媒体库获取路径均失败或返回空项');
       }
     } catch (e, stackTrace) {
       print('Error loading available libraries: $e');
@@ -1731,7 +1777,8 @@ class EmbyService extends MediaServerServiceBase
   }
 
   /// 获取Emby视频的字幕轨道信息，包括内嵌字幕和外挂字幕
-  Future<List<Map<String, dynamic>>> getSubtitleTracks(String itemId) async {
+  Future<List<Map<String, dynamic>>> getSubtitleTracks(String itemId,
+      {String? mediaSourceId}) async {
     if (!_isConnected) {
       throw Exception('未连接到Emby服务器');
     }
@@ -1746,7 +1793,15 @@ class EmbyService extends MediaServerServiceBase
           debugPrint('EmbyService: 未找到媒体源信息');
           return [];
         }
-        final mediaSource = mediaSources[0];
+        dynamic mediaSource = mediaSources[0];
+        if (mediaSourceId != null && mediaSourceId.isNotEmpty) {
+          for (final source in mediaSources) {
+            if (source is Map && source['Id']?.toString() == mediaSourceId) {
+              mediaSource = source;
+              break;
+            }
+          }
+        }
         final mediaStreams = mediaSource['MediaStreams'] as List?;
         if (mediaStreams == null) {
           debugPrint('EmbyService: 未找到媒体流信息');
@@ -1828,7 +1883,8 @@ class EmbyService extends MediaServerServiceBase
 
   /// 下载Emby外挂字幕文件
   Future<String?> downloadSubtitleFile(
-      String itemId, int subtitleIndex, String format) async {
+      String itemId, int subtitleIndex, String format,
+      {String? mediaSourceId}) async {
     if (kIsWeb) return null;
     if (!_isConnected || _accessToken == null) {
       throw Exception('未连接到Emby服务器');
@@ -1847,16 +1903,30 @@ class EmbyService extends MediaServerServiceBase
         debugPrint('EmbyService: 未找到媒体源信息');
         return null;
       }
-      final mediaSourceId = mediaSources[0]['Id'];
+      dynamic mediaSource = mediaSources[0];
+      if (mediaSourceId != null && mediaSourceId.isNotEmpty) {
+        for (final source in mediaSources) {
+          if (source is Map && source['Id']?.toString() == mediaSourceId) {
+            mediaSource = source;
+            break;
+          }
+        }
+      }
+      final resolvedMediaSourceId = mediaSource['Id'];
       // 构建字幕下载URL
       final subtitleUrl =
-          '$_serverUrl/emby/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format?api_key=$_accessToken';
+          '$_serverUrl/emby/Videos/$itemId/$resolvedMediaSourceId/Subtitles/$subtitleIndex/Stream.$format?api_key=$_accessToken';
       debugPrint(
         'EmbyService: 下载字幕文件: ${Uri.parse(subtitleUrl).replace(queryParameters: const <String, String>{})}',
       );
       // 下载字幕文件
-      final subtitleResponse = await http
-          .get(WebRemoteAccessService.proxyUri(Uri.parse(subtitleUrl)));
+      final subtitleResponse = await sendRequestFollowingRedirects(
+        WebRemoteAccessService.proxyUri(Uri.parse(subtitleUrl)),
+        method: 'GET',
+        headers: const {},
+        timeout: const Duration(seconds: 30),
+        redirectLogLabel: 'EmbyService: 下载字幕',
+      );
       if (subtitleResponse.statusCode == 200) {
         // 保存到临时文件
         final tempDir = await getTemporaryDirectory();

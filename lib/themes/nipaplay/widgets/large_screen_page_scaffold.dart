@@ -16,6 +16,7 @@ class NipaplayLargeScreenPageScaffold extends StatelessWidget {
     this.trailing,
     this.padding = const EdgeInsets.fromLTRB(44, 28, 44, 32),
     this.headerBottomSpacing = 24,
+    this.showBackgroundEffects = true,
   });
 
   final String title;
@@ -25,6 +26,7 @@ class NipaplayLargeScreenPageScaffold extends StatelessWidget {
   final Widget? trailing;
   final EdgeInsetsGeometry padding;
   final double headerBottomSpacing;
+  final bool showBackgroundEffects;
   final Widget child;
 
   @override
@@ -35,43 +37,45 @@ class NipaplayLargeScreenPageScaffold extends StatelessWidget {
 
     return Stack(
       children: [
-        Positioned.fill(
-          child: ColoredBox(
-            color: isDark
-                ? Colors.black.withValues(alpha: 0.34)
-                : Colors.white.withValues(alpha: 0.18),
+        if (showBackgroundEffects) ...[
+          Positioned.fill(
+            child: ColoredBox(
+              color: isDark
+                  ? Colors.black.withValues(alpha: 0.34)
+                  : Colors.white.withValues(alpha: 0.18),
+            ),
           ),
-        ),
-        Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(-0.78, -0.72),
-                radius: 1.35,
-                colors: [
-                  AppAccentColors.current
-                      .withValues(alpha: isDark ? 0.12 : 0.08),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.66],
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(-0.78, -0.72),
+                  radius: 1.35,
+                  colors: [
+                    AppAccentColors.current
+                        .withValues(alpha: isDark ? 0.12 : 0.08),
+                    Colors.transparent,
+                  ],
+                  stops: const [0, 0.66],
+                ),
               ),
             ),
           ),
-        ),
-        Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: isDark ? 0.08 : 0.00),
-                  Colors.black.withValues(alpha: isDark ? 0.28 : 0.04),
-                ],
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: isDark ? 0.08 : 0.00),
+                    Colors.black.withValues(alpha: isDark ? 0.28 : 0.04),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
+        ],
         Positioned.fill(
           child: Padding(
             padding: padding,
@@ -140,11 +144,19 @@ class NipaplayLargeScreenSectionHeader extends StatelessWidget {
     required this.title,
     this.subtitle,
     this.trailing,
+    this.titleMaxLines = 1,
+    this.titleOverflow = TextOverflow.ellipsis,
   });
 
   final String title;
   final String? subtitle;
   final Widget? trailing;
+
+  /// 标题最大行数，默认 1（省略号截断）；传入 null 可多行完整显示
+  final int? titleMaxLines;
+
+  /// 标题溢出处理，默认省略号截断
+  final TextOverflow titleOverflow;
 
   @override
   Widget build(BuildContext context) {
@@ -159,8 +171,8 @@ class NipaplayLargeScreenSectionHeader extends StatelessWidget {
             children: [
               Text(
                 title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                maxLines: titleMaxLines,
+                overflow: titleOverflow,
                 style: TextStyle(
                   color: textColor,
                   fontSize: 22,
