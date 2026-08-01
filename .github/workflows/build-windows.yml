@@ -1,6 +1,7 @@
 name: Build Windows
 
 on:
+  workflow_dispatch:
   workflow_call:
     outputs:
       version:
@@ -26,6 +27,7 @@ jobs:
       # by the build-windows action, so fvp must trust it and skip downloads.
       FVP_DEPS_LATEST: 0
       ERIKA_PREBUILT: "1"
+      NIPAPLAY_PORTABLE_ONLY: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -54,14 +56,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-Windows-x64
-          path: |
-            build/windows/*
-            !build/windows/symbols-windows
-
-      - name: Upload Dart debug symbols (for de-obfuscating crash stacks)
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: dart-symbols-Windows
-          path: build/symbols-windows/
-          if-no-files-found: warn
+          path: build/windows/*.zip
+          if-no-files-found: error
