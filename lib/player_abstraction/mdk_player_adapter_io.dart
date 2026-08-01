@@ -382,6 +382,11 @@ class MdkPlayerAdapter implements AbstractPlayer {
   }
 
   @override
+  Future<void> openMedia(String value) async {
+    media = value;
+  }
+
+  @override
   PlayerMediaInfo get mediaInfo => _toPlayerMediaInfo(_mdkPlayer.mediaInfo,
       internalAudioTrackCount: _internalAudioTrackCount);
 
@@ -544,8 +549,8 @@ class MdkPlayerAdapter implements AbstractPlayer {
   }
 
   @override
-  void setUserAgent(String ua) {
-    applyMdkUserAgentProperties(setProperty, ua);
+  Future<void> setUserAgent(String ua) async {
+    applyMdkUserAgentProperties(_setStickyProperty, ua);
     debugPrint('MDK: 已设置 user-agent: ${ua.isEmpty ? "(默认)" : ua}');
   }
 
