@@ -468,6 +468,16 @@ void main() {
     await tester.tap(find.text('排序'));
     await tester.pumpAndSettle();
 
+    expect(find.text('媒体库排序'), findsOneWidget);
+    final reorderableList = tester.widget<ReorderableListView>(
+      find.byType(ReorderableListView),
+    );
+    expect(reorderableList.onReorderItem, isNotNull);
+    expect(reorderableList.onReorder, isNull);
+    for (final section in _sections) {
+      expect(find.text(section.label), findsWidgets);
+    }
+
     final embyRow = find.byKey(
       const ValueKey<String>('media-library-order-row-emby'),
     );
