@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart' as cupertino;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nipaplay/app/app_display_surface.dart';
@@ -22,6 +23,8 @@ import 'package:nipaplay/providers/watch_history_provider.dart';
 import 'package:nipaplay/utils/tab_change_notifier.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'helpers/route_recording_observer.dart';
 
 const _dynamicSection = UnifiedMediaLibrarySection(
   id: 'future-media-source',
@@ -374,12 +377,16 @@ void main() {
   );
 
   testWidgets(
-    'desktop media library exposes every dynamic section to sorting',
+    'desktop media library sort dialog opens without requesting route focus',
     (tester) async {
       List<String>? savedOrder;
+      final routeObserver = RouteRecordingObserver();
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
       await tester.pumpWidget(
         MaterialApp(
+          navigatorObservers: <NavigatorObserver>[routeObserver],
           home: AppDisplaySurfaceScope(
             surface: AppDisplaySurface.desktopTablet,
             child: SizedBox(
@@ -402,6 +409,12 @@ void main() {
       await tester.tap(find.text('排序'));
       await tester.pumpAndSettle();
 
+      expect(
+        routeObserver.lastPushedRoute?.requestFocus,
+        isFalse,
+        reason: 'The Windows desktop dialog must not synchronously request '
+            'native window focus.',
+      );
       expect(find.text('媒体库排序'), findsOneWidget);
       for (final section in _sections) {
         expect(find.text(section.label), findsWidgets);

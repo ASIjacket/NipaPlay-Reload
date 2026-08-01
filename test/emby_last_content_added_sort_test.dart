@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nipaplay/app/app_display_surface.dart';
@@ -11,9 +12,12 @@ import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/media_library_sort_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_library_view.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'helpers/route_recording_observer.dart';
 
 void main() {
   const sortBy = 'DateLastContentAdded';
@@ -181,7 +185,7 @@ void main() {
     );
   });
 
-  testWidgets('selecting the Emby sort option uses one library request', (
+  testWidgets('Emby sort dialog avoids focus and request storms', (
     tester,
   ) async {
     await HttpOverrides.runWithHttpOverrides(() async {
@@ -260,7 +264,10 @@ void main() {
       );
       final provider = EmbyProvider();
       final appearanceProvider = AppearanceSettingsProvider();
+      final routeObserver = RouteRecordingObserver();
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       addTearDown(() async {
+        debugDefaultTargetPlatformOverride = null;
         provider.dispose();
         appearanceProvider.dispose();
         await tester.runAsync(() => server.close(force: true));
@@ -291,8 +298,9 @@ void main() {
               value: appearanceProvider,
             ),
           ],
-          child: const MaterialApp(
-            home: AppDisplaySurfaceScope(
+          child: MaterialApp(
+            navigatorObservers: <NavigatorObserver>[routeObserver],
+            home: const AppDisplaySurfaceScope(
               surface: AppDisplaySurface.desktopTablet,
               child: SizedBox(
                 width: 1000,
@@ -324,6 +332,24 @@ void main() {
           () => find.text('最后一集添加时间 (降序)').evaluate().isNotEmpty,
           description: 'remote sort options to appear',
           timeout: const Duration(seconds: 2),
+        );
+        final firstDialogAction = tester.widget<
+            NipaplayLargeScreenFocusableAction>(
+          find
+              .descendant(
+                of: find.byType(Dialog),
+                matching: find.byType(NipaplayLargeScreenFocusableAction),
+              )
+              .first,
+        );
+        expect(
+          <bool?>[
+            routeObserver.lastPushedRoute?.requestFocus,
+            firstDialogAction.autofocus,
+          ],
+          <bool?>[false, false],
+          reason: 'The Windows desktop dialog and its first option must not '
+              'synchronously request native window focus.',
         );
         final sortOption = find.text('最后一集添加时间 (降序)');
         await tester.ensureVisible(sortOption);
