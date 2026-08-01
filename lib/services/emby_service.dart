@@ -1259,8 +1259,15 @@ class EmbyService extends MediaServerServiceBase
           break;
         }
       }
+      if (selected == null) {
+        throw StateError(
+          'Emby did not return requested media source '
+          '$requestedMediaSourceId',
+        );
+      }
+    } else {
+      selected = sources.isNotEmpty ? sources.first : null;
     }
-    selected ??= sources.isNotEmpty ? sources.first : null;
 
     final directStreamUrl = selected?.directStreamUrl;
     final transcodingUrl = selected?.transcodingUrl;
