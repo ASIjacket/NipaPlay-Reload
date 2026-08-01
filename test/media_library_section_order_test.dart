@@ -377,12 +377,10 @@ void main() {
   );
 
   testWidgets(
-    'desktop media library sort dialog opens without requesting route focus',
+    'desktop media library sort dialog uses platform-appropriate route focus',
     (tester) async {
       List<String>? savedOrder;
       final routeObserver = RouteRecordingObserver();
-      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -411,9 +409,9 @@ void main() {
 
       expect(
         routeObserver.lastPushedRoute?.requestFocus,
-        isFalse,
-        reason: 'The Windows desktop dialog must not synchronously request '
-            'native window focus.',
+        defaultTargetPlatform != TargetPlatform.windows,
+        reason: 'Only the native Windows dialog must avoid synchronously '
+            'requesting window focus.',
       );
       expect(find.text('媒体库排序'), findsOneWidget);
       for (final section in _sections) {
@@ -450,6 +448,10 @@ void main() {
         _dynamicSection.id,
       ]);
     },
+    variant: const TargetPlatformVariant(<TargetPlatform>{
+      TargetPlatform.linux,
+      TargetPlatform.windows,
+    }),
   );
 
   testWidgets('desktop section labels do not start a reorder gesture', (

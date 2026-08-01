@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart' as cupertino;
+import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart' as material;
 import 'package:nipaplay/app/app_display_surface.dart';
 import 'package:nipaplay/app/app_display_surface_scope.dart';
@@ -453,6 +454,8 @@ Future<List<String>?> showAdaptiveMediaLibrarySectionOrder(
 
   return material.showDialog<List<String>>(
     context: context,
+    requestFocus: foundation.kIsWeb ||
+        foundation.defaultTargetPlatform != foundation.TargetPlatform.windows,
     builder: (dialogContext) {
       final viewport = material.MediaQuery.sizeOf(dialogContext);
       final maximumWidth = (viewport.width - 96).clamp(0.0, 720.0);

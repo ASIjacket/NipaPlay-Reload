@@ -14,6 +14,7 @@ import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/media_library_sort_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_library_view.dart';
+import 'package:nipaplay/utils/image_cache_manager.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -265,9 +266,7 @@ void main() {
       final provider = EmbyProvider();
       final appearanceProvider = AppearanceSettingsProvider();
       final routeObserver = RouteRecordingObserver();
-      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       addTearDown(() async {
-        debugDefaultTargetPlatformOverride = null;
         provider.dispose();
         appearanceProvider.dispose();
         await tester.runAsync(() => server.close(force: true));
@@ -333,8 +332,8 @@ void main() {
           description: 'remote sort options to appear',
           timeout: const Duration(seconds: 2),
         );
-        final firstDialogAction = tester.widget<
-            NipaplayLargeScreenFocusableAction>(
+        final firstDialogAction =
+            tester.widget<NipaplayLargeScreenFocusableAction>(
           find
               .descendant(
                 of: find.byType(Dialog),
@@ -347,9 +346,12 @@ void main() {
             routeObserver.lastPushedRoute?.requestFocus,
             firstDialogAction.autofocus,
           ],
-          <bool?>[false, false],
-          reason: 'The Windows desktop dialog and its first option must not '
-              'synchronously request native window focus.',
+          <bool?>[
+            defaultTargetPlatform != TargetPlatform.windows,
+            defaultTargetPlatform != TargetPlatform.windows,
+          ],
+          reason: 'Only the native Windows dialog and its first option must '
+              'avoid synchronously requesting window focus.',
         );
         final sortOption = find.text('最后一集添加时间 (降序)');
         await tester.ensureVisible(sortOption);
@@ -366,6 +368,12 @@ void main() {
           tester,
           () => sortedResponsesCompleted.isCompleted,
           description: 'all sorted responses to complete',
+          timeout: const Duration(seconds: 2),
+        );
+        await _pumpUntil(
+          tester,
+          () => find.text('Item 0').evaluate().isNotEmpty,
+          description: 'sorted library results to render',
           timeout: const Duration(seconds: 2),
         );
 
@@ -386,6 +394,7 @@ void main() {
           <String>{'Descending'},
         );
       } finally {
+        ImageCacheManager.instance.clear();
         await tester.pumpWidget(
           MultiProvider(
             providers: [
@@ -400,7 +409,10 @@ void main() {
         await tester.pump();
       }
     }, _RealHttpOverrides());
-  });
+  }, variant: const TargetPlatformVariant(<TargetPlatform>{
+    TargetPlatform.linux,
+    TargetPlatform.windows,
+  }));
 }
 
 class _RealHttpOverrides extends HttpOverrides {}

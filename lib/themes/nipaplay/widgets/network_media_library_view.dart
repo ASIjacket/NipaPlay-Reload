@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart' as cupertino;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:nipaplay/models/jellyfin_model.dart';
@@ -923,6 +924,8 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
 
   Future<void> _showLargeScreenRemoteSortDialog() async {
     final provider = _provider;
+    final allowAutomaticDialogFocus =
+        kIsWeb || defaultTargetPlatform != TargetPlatform.windows;
     final currentSortSettings = _getCurrentRemoteSortSettings(provider);
     final items = _buildRemoteSortItems(
       currentSortSettings['sortBy']!,
@@ -931,6 +934,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
     final selection = await showDialog<_RemoteSortSelection>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.54),
+      requestFocus: allowAutomaticDialogFocus,
       builder: (context) {
         return Dialog(
           backgroundColor: Colors.transparent,
@@ -957,7 +961,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
                         final value = item.value;
                         final description = value.description;
                         return NipaplayLargeScreenFocusableAction(
-                          autofocus: index == 0,
+                          autofocus: allowAutomaticDialogFocus && index == 0,
                           onActivate: () => Navigator.of(context).pop(value),
                           borderRadius: BorderRadius.circular(8),
                           padding: const EdgeInsets.all(14),
