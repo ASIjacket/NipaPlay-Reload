@@ -126,6 +126,75 @@ void main() {
     expect(containerRunner, contains('--build-arg'));
   });
 
+  test('Windows build runs the Erika compatibility patch after final pub get',
+      () {
+    final action = File('.github/actions/build-windows/action.yml')
+        .readAsStringSync();
+
+    final pubGetIndex =
+        action.indexOf('- name: Refresh Pub dependencies (post-web build)');
+    final patchIndex = action.indexOf(
+      '- name: Patch Erika Windows BoolArg regression',
+    );
+    expect(pubGetIndex, greaterThanOrEqualTo(0));
+    expect(patchIndex, greaterThan(pubGetIndex));
+    expect(
+      action,
+      contains('python tool/patch_erika_windows_boolarg.py'),
+    );
+  });
+
+  test('Erika Windows compatibility patch is strict and idempotent', () {
+    final temp = Directory.systemTemp.createTempSync('nipaplay_erika_patch_');
+    addTearDown(() => temp.deleteSync(recursive: true));
+
+    const broken =
+        'PlayerFromArgs(args).SetDebugHudEnabled(BoolArg(args, "enabled", false));';
+    const fixed = 'PlayerFromArgs(args).SetDebugHudEnabled(\n'
+        '          BoolValue(FindArg(args, "enabled")).value_or(false));';
+    final source = File('${temp.path}/erika_flutter_plugin.cpp')
+      ..writeAsStringSync('before\n$broken\nafter\n');
+
+    final first = _runErikaPatch(['--source', source.path]);
+    expect(first.exitCode, 0, reason: '${first.stdout}\n${first.stderr}');
+    expect(source.readAsStringSync(), contains(fixed));
+    expect(source.readAsStringSync(), isNot(contains(broken)));
+
+    final repeated = _runErikaPatch(['--source', source.path]);
+    expect(
+      repeated.exitCode,
+      0,
+      reason: '${repeated.stdout}\n${repeated.stderr}',
+    );
+
+    source.writeAsStringSync('$broken\n$fixed\n');
+    final ambiguous = _runErikaPatch(['--source', source.path]);
+    expect(ambiguous.exitCode, isNot(0));
+    expect('${ambiguous.stdout}\n${ambiguous.stderr}', contains('unexpected'));
+  });
+
+  test('Erika Windows compatibility patch honors a custom PUB_CACHE', () {
+    final temp = Directory.systemTemp.createTempSync('nipaplay_pub_cache_');
+    addTearDown(() => temp.deleteSync(recursive: true));
+
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const broken =
+        'PlayerFromArgs(args).SetDebugHudEnabled(BoolArg(args, "enabled", false));';
+    final source = File(
+      '${temp.path}/git/Erika-$sha/packages/erika_flutter/windows/'
+      'erika_flutter_plugin.cpp',
+    );
+    source.parent.createSync(recursive: true);
+    source.writeAsStringSync('$broken\n');
+
+    final result = _runErikaPatch(
+      ['--erika-sha', sha],
+      environment: {'PUB_CACHE': temp.path},
+    );
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    expect(source.readAsStringSync(), contains('BoolValue(FindArg(args'));
+  });
+
   test('isolated media_kit EGL keeps Linux ARM64 and scaling safeguards', () {
     final source = File('packages/media_kit_video/linux/video_output.cc')
         .readAsStringSync();
@@ -213,6 +282,21 @@ void main() {
       reason: 'Platform.isOhos is unavailable in upstream Dart.',
     );
   });
+}
+
+ProcessResult _runErikaPatch(
+  List<String> arguments, {
+  Map<String, String>? environment,
+}) {
+  final python = Platform.isWindows ? 'python' : 'python3';
+  return Process.runSync(
+    python,
+    ['tool/patch_erika_windows_boolarg.py', ...arguments],
+    environment: <String, String>{
+      ...Platform.environment,
+      ...?environment,
+    },
+  );
 }
 
 Set<String> _dependencyOverrideKeys(String yaml) {

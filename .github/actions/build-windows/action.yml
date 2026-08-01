@@ -283,6 +283,11 @@ runs:
         fi
         flutter pub get --enforce-lockfile
 
+    - name: Patch Erika Windows BoolArg regression
+      shell: pwsh
+      run: |
+        python tool/patch_erika_windows_boolarg.py --erika-sha "$env:ERIKA_SHA"
+
     - name: Download full libmpv package
       shell: pwsh
       run: |
