@@ -266,6 +266,12 @@ runs:
         fi
         flutter pub get # 暂时移除了--enforce-lockfile
 
+    - name: Patch Erika Windows BoolArg regression
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        python tool/patch_erika_windows_boolarg.py --erika-sha "$env:ERIKA_SHA"
+
     - name: Configure Erika prebuilt release
       if: env.ERIKA_PREBUILT == '1' && env.ERIKA_FORCE_SOURCE_BUILD != '1'
       shell: bash
