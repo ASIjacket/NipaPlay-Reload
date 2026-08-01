@@ -94,7 +94,7 @@ void main() {
     expect(itemsRequest.queryParameters['Limit'], '37');
   });
 
-  test('large Emby sorted libraries are fetched in bounded pages', () async {
+  test('large Emby sorted libraries use one sorted request', () async {
     SharedPreferences.setMockInitialValues({});
     const totalItems = 201;
     final itemRequests = <Uri>[];
@@ -168,23 +168,9 @@ void main() {
     );
 
     expect(items, hasLength(totalItems));
-    expect(itemRequests.length, greaterThan(1));
-    final startIndices = itemRequests
-        .map(
-          (uri) => int.tryParse(uri.queryParameters['StartIndex'] ?? '') ?? 0,
-        )
-        .toList();
-    final pageLimits = itemRequests
-        .map((uri) => int.parse(uri.queryParameters['Limit']!))
-        .toList();
-    expect(startIndices.first, 0);
-    for (var index = 1; index < startIndices.length; index++) {
-      expect(
-        startIndices[index],
-        startIndices[index - 1] + pageLimits[index - 1],
-      );
-    }
-    expect(pageLimits, everyElement(lessThanOrEqualTo(200)));
+    expect(itemRequests, hasLength(1));
+    expect(itemRequests.single.queryParameters['StartIndex'], isNull);
+    expect(itemRequests.single.queryParameters['Limit'], '99999');
     expect(
       itemRequests.map((uri) => uri.queryParameters['SortBy']).toSet(),
       <String>{sortBy},
@@ -195,7 +181,7 @@ void main() {
     );
   });
 
-  testWidgets('selecting the Emby sort option uses bounded library requests', (
+  testWidgets('selecting the Emby sort option uses one library request', (
     tester,
   ) async {
     await HttpOverrides.runWithHttpOverrides(() async {
@@ -361,13 +347,12 @@ void main() {
           'sortBy': sortBy,
           'sortOrder': 'Descending',
         });
-        expect(sortedItemRequests.length, greaterThan(1));
+        expect(sortedItemRequests, hasLength(1));
         expect(
-          sortedItemRequests.map(
-            (uri) => int.parse(uri.queryParameters['Limit']!),
-          ),
-          everyElement(lessThanOrEqualTo(200)),
+          sortedItemRequests.single.queryParameters['StartIndex'],
+          isNull,
         );
+        expect(sortedItemRequests.single.queryParameters['Limit'], '99999');
         expect(
           sortedItemRequests
               .map((uri) => uri.queryParameters['SortOrder'])
