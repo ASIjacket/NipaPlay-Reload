@@ -28,6 +28,7 @@ import 'package:nipaplay/media_library/adaptive_media_library_primitives.dart';
 import 'package:nipaplay/app/app_display_surface.dart';
 import 'package:nipaplay/app/app_display_surface_scope.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/widgets/in_view_dialog.dart';
 
 enum NetworkMediaServerType { jellyfin, emby }
 
@@ -928,7 +929,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
       currentSortSettings['sortBy']!,
       currentSortSettings['sortOrder']!,
     );
-    final selection = await showDialog<_RemoteSortSelection>(
+    final selection = await showInViewDialog<_RemoteSortSelection>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.54),
       builder: (context) {
