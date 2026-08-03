@@ -43,6 +43,8 @@ void main() {
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
     expect(find.text('In-view dialog'), findsNothing);
+
+    debugDefaultTargetPlatformOverride = null;
   });
 }
 
