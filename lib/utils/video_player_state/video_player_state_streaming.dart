@@ -209,34 +209,138 @@ extension VideoPlayerStateStreaming on VideoPlayerState {
   }
 
   /// 加载Emby外挂字幕
-  Future<void> _loadEmbyExternalSubtitles(String videoPath) async {
+  Future<void> _loadEmbyExternalSubtitles(
+    String videoPath,
+    EmbyExternalSubtitleAction action,
+  ) async {
+    final generation = _playbackGeneration;
+    bool isCurrentPlayback() =>
+        !_isDisposed &&
+        generation == _playbackGeneration &&
+        _currentVideoPath == videoPath;
+    if (!isCurrentPlayback()) return;
+
+    final itemId = embyItemIdFromVideoPath(videoPath);
+    final mediaSourceId = _currentPlaybackSession?.mediaSourceId;
+    if (action.kind == EmbyExternalSubtitleActionKind.select &&
+        (mediaSourceId == null || mediaSourceId.isEmpty)) {
+      throw StateError('The selected Emby media source is unavailable.');
+    }
+
+    await applyEmbyExternalSubtitleAction(
+      action: action,
+      videoPath: videoPath,
+      itemId: itemId,
+      mediaSourceId: mediaSourceId ?? '',
+      download: (
+        selectedItemId,
+        selectedMediaSourceId,
+        streamIndex,
+        codec,
+      ) async {
+        if (!isCurrentPlayback()) return null;
+        final path = await EmbyService.instance.downloadSubtitleFile(
+          selectedItemId,
+          streamIndex,
+          codec,
+          mediaSourceId: selectedMediaSourceId,
+        );
+        return isCurrentPlayback() ? path : null;
+      },
+      cache: (path, subtitlePath, streamIndex, codec) async {
+        if (!isCurrentPlayback()) return false;
+        final fingerprint = action.fingerprint!;
+        final subtitleInfo = <String, dynamic>{
+          'path': subtitlePath,
+          'name': _buildStreamingSubtitleName(
+            <String, dynamic>{
+              'title': fingerprint.normalizedTitle,
+              'language': fingerprint.language,
+              'codec': codec,
+            },
+            subtitlePath,
+          ),
+          'type': codec,
+          'addTime': DateTime.now().millisecondsSinceEpoch,
+          'isActive': true,
+          'remoteSource': 'Emby',
+          'serverSubtitleIndex': streamIndex,
+          'language': fingerprint.language,
+          'title': fingerprint.normalizedTitle,
+          'isDefault': false,
+          'isForced': false,
+        };
+        return SubtitleService().addExternalSubtitles(
+          path,
+          <Map<String, dynamic>>[subtitleInfo],
+          activePath: subtitlePath,
+        );
+      },
+      activate: (subtitlePath, _) async {
+        if (!isCurrentPlayback()) {
+          throw StateError(
+              'The Emby playback changed while loading subtitles.');
+        }
+        await _subtitleManager.activateEmbyExternalSubtitle(
+          subtitlePath,
+          isManualSetting: false,
+        );
+      },
+      followDefault: () async {
+        if (isCurrentPlayback()) {
+          await _loadDefaultEmbyExternalSubtitles(videoPath);
+        }
+      },
+    );
+  }
+
+  Future<void> _loadDefaultEmbyExternalSubtitles(String videoPath) async {
+    final generation = _playbackGeneration;
+    bool isCurrentPlayback() =>
+        !_isDisposed &&
+        generation == _playbackGeneration &&
+        _currentVideoPath == videoPath;
     try {
       final itemId = embyItemIdFromVideoPath(videoPath);
       final mediaSourceId = _currentPlaybackSession?.mediaSourceId;
       debugPrint('[Emby字幕] 开始加载外挂字幕，itemId: $itemId');
-      final subtitleTracks = await EmbyService.instance
-          .getSubtitleTracks(itemId, mediaSourceId: mediaSourceId);
-      if (subtitleTracks.isEmpty) {
-        debugPrint('[Emby字幕] 未找到字幕轨道');
-        return;
-      }
-      final externalSubtitles = subtitleTracks
-          .where((track) => track['type'] == 'external')
-          .map((track) => Map<String, dynamic>.from(track))
-          .toList();
-      if (externalSubtitles.isEmpty) {
-        debugPrint('[Emby字幕] 未找到外挂字幕轨道');
-        return;
-      }
-      await _loadStreamingExternalSubtitles(
-        videoPath: videoPath,
-        sourceLabel: 'Emby字幕',
-        itemId: itemId,
-        externalSubtitles: externalSubtitles,
-        subtitleDownloader: (subtitleIndex, subtitleCodec) => EmbyService
-            .instance
-            .downloadSubtitleFile(itemId, subtitleIndex, subtitleCodec,
-                mediaSourceId: mediaSourceId),
+      await loadDefaultEmbyExternalSubtitles(
+        getTracks: () => EmbyService.instance.getSubtitleTracks(
+          itemId,
+          mediaSourceId: mediaSourceId,
+        ),
+        download: (subtitleIndex, subtitleCodec) =>
+            EmbyService.instance.downloadSubtitleFile(
+          itemId,
+          subtitleIndex,
+          subtitleCodec,
+          mediaSourceId: mediaSourceId,
+        ),
+        cache: (downloaded, activePath) async {
+          final subtitleInfos = downloaded.map((track) {
+            final subtitlePath = track['path'] as String;
+            return <String, dynamic>{
+              ...track,
+              'name': _buildStreamingSubtitleName(track, subtitlePath),
+              'addTime': DateTime.now().millisecondsSinceEpoch,
+              'isActive': subtitlePath == activePath,
+              'remoteSource': 'Emby字幕',
+              'isDefault': track['isDefault'] == true,
+              'isForced': track['isForced'] == true,
+            };
+          }).toList();
+          return SubtitleService().addExternalSubtitles(
+            videoPath,
+            subtitleInfos,
+            activePath: activePath,
+          );
+        },
+        activate: (subtitlePath, _) =>
+            _subtitleManager.activateEmbyExternalSubtitle(
+          subtitlePath,
+          isManualSetting: false,
+        ),
+        isCurrent: isCurrentPlayback,
       );
     } catch (e) {
       debugPrint('[Emby字幕] 加载外挂字幕时出错: $e');

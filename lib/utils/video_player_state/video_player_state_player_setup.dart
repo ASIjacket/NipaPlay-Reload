@@ -789,7 +789,65 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         await _loadJellyfinExternalSubtitles(videoPath);
       }
       if (isEmbyStream) {
-        await _loadEmbyExternalSubtitles(videoPath);
+        final trackSelection = _currentEmbyTrackSelection;
+        final isTranscoding = _currentPlaybackSession?.isTranscoding ?? false;
+        if (trackSelection == null) {
+          if (!isTranscoding) {
+            await _loadEmbyExternalSubtitles(
+              videoPath,
+              const EmbyExternalSubtitleAction.followDefault(),
+            );
+          }
+        } else {
+          await applyEmbyTracksForVideoPath(
+            videoPath: videoPath,
+            isTranscoding: isTranscoding,
+            applyEmby: () async {
+              bool isCurrentPlayback() =>
+                  !_isDisposed &&
+                  initializationGeneration == _playbackGeneration &&
+                  _currentVideoPath == videoPath;
+              if (!isCurrentPlayback()) return;
+              await applyEmbyResolvedTracksAfterOpen(
+                mediaInfo: player.mediaInfo,
+                bundle: trackSelection,
+                setActiveAudio: (indexes) {
+                  if (isCurrentPlayback()) {
+                    player.activeAudioTracks = indexes;
+                  }
+                },
+                setActiveSubtitle: (indexes) {
+                  if (isCurrentPlayback()) {
+                    player.activeSubtitleTracks = indexes;
+                  }
+                },
+                clearExternal: () async {
+                  if (isCurrentPlayback()) {
+                    final activeEmbeddedTracks =
+                        List<int>.of(player.activeSubtitleTracks);
+                    await _subtitleManager.activateEmbyExternalSubtitle(
+                      '',
+                      isManualSetting: false,
+                    );
+                    if (activeEmbeddedTracks.isNotEmpty &&
+                        isCurrentPlayback()) {
+                      player.activeSubtitleTracks = activeEmbeddedTracks;
+                    }
+                  }
+                },
+                loadExternal: (action) async {
+                  if (isCurrentPlayback()) {
+                    await _loadEmbyExternalSubtitles(videoPath, action);
+                  }
+                },
+              );
+              if (isCurrentPlayback()) {
+                _subtitleManager.updateAllSubtitleTracksInfo();
+                _subtitleManager.onSubtitleTrackChanged();
+              }
+            },
+          );
+        }
       }
 
       //debugPrint('10. 开始识别视频和加载弹幕...');
@@ -971,7 +1029,11 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       }
 
       // 尝试自动检测和加载字幕
-      if (!isAndroidContentUri) {
+      final shouldAutoDetectSubtitle = !isEmbyStream ||
+          _currentEmbyTrackSelection == null ||
+          _currentEmbyTrackSelection!.subtitle.mode ==
+              EmbyResolvedTrackMode.followDefault;
+      if (!isAndroidContentUri && shouldAutoDetectSubtitle) {
         await _subtitleManager.autoDetectAndLoadSubtitle(videoPath);
       }
 
