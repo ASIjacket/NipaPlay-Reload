@@ -378,7 +378,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     switch (_playbackEndAction) {
       case PlaybackEndAction.autoNext:
         if (_context != null && _context!.mounted) {
-          AutoNextEpisodeService.instance.startAutoNextEpisode(
+          await AutoNextEpisodeService.instance.startAutoNextEpisode(
             _context!,
             _currentVideoPath!,
           );
@@ -687,6 +687,8 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _lastRawPlayerMs = -1; // 重置，让下次 ticker 走首帧锚定
     _anchorSetBySeek = false;
     _pausedPlaybackTimeMs = null; // 清理旧集暂停保存值，避免新集 play() 误用
+    _mdkNearEndLastPositionMs = -1;
+    _mdkNearEndStalledSinceMs = 0;
     if (!kReleaseMode) {
       debugPrint('[EP-SWITCH-DIAG] _clearPreviousVideoState ANCHOR RESET: '
           'ptm=0.0 smoothAnchorMs=0.0 smoothAnchorElapsedUs=$_smoothAnchorElapsedUs '
@@ -887,6 +889,35 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
           setShowControls(false);
         }
       });
+    }
+  }
+
+  /// Uses a single, television-friendly timeout for large-screen controls.
+  ///
+  /// The desktop player also owns legacy 1.5 second mouse timers. Those are
+  /// deliberately cancelled here so remote navigation always gets five full
+  /// seconds after the latest interaction.
+  void resetLargeScreenControlsAutoHideTimer() {
+    _hideControlsTimer?.cancel();
+    _hideMouseTimer?.cancel();
+    resetAutoHideTimer();
+  }
+
+  /// Idempotently reveals the controls for a remote MENU/Escape event.
+  ///
+  /// flutter-tvos can surface one remote press both as a key event and as a
+  /// navigation popRoute. Making reveal idempotent prevents the two delivery
+  /// paths from toggling the controls on and immediately back off.
+  void revealLargeScreenControls() {
+    _hideControlsTimer?.cancel();
+    _hideMouseTimer?.cancel();
+    _autoHideTimer?.cancel();
+
+    final visibilityChanged = !_showControls;
+    _showControls = true;
+    resetLargeScreenControlsAutoHideTimer();
+    if (visibilityChanged) {
+      _notifyListeners();
     }
   }
 

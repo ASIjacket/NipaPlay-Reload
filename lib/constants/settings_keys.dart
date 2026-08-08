@@ -47,9 +47,6 @@ class SettingsKeys {
 
   static const String showRemoteAccessQrCode = 'show_remote_access_qr_code';
 
-  static const String labsEnableLargeScreenMode =
-      'labs_enable_large_screen_mode';
-
   static const String labsShowRemoteAccessQrCode =
       'labs_show_remote_access_qr_code';
 
@@ -112,6 +109,8 @@ class SettingsKeys {
   static const String danmakuShadowStyle = 'danmaku_shadow_style'; // 阴影样式设置
   static const String next2DanmakuOutlineWidth =
       'next2_danmaku_outline_width'; // 描边宽度设置
+  static const String tvOSErikaDanmakuOutlineDefaultMigrated =
+      'tvos_erika_danmaku_outline_default_migrated_v1';
   static const String danmakuDisplayArea = 'danmaku_display_area'; // 显示区域设置
   static const String danmakuSpeedMultiplier =
       'danmaku_speed_multiplier'; // 速度倍数设置

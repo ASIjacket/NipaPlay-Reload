@@ -330,6 +330,7 @@ void main() {
       <UnifiedHomeComponentType>[
         UnifiedHomeComponentType.hero,
         UnifiedHomeComponentType.todaySeries,
+        UnifiedHomeComponentType.trending,
         UnifiedHomeComponentType.continueWatching,
         UnifiedHomeComponentType.remoteLibraries,
         UnifiedHomeComponentType.localLibrary,
@@ -558,7 +559,11 @@ void main() {
     );
   });
 
-  test('iOS 26 kernel selectors opt into native dropdown menus', () {
+  test('phone setting selectors share native and NipaPlay dropdown routing',
+      () {
+    final adaptive = File(
+      'lib/settings/adaptive_settings_widgets.dart',
+    ).readAsStringSync();
     final player = File(
       'lib/settings/pages/player_settings_content.dart',
     ).readAsStringSync();
@@ -566,24 +571,14 @@ void main() {
       'lib/settings/pages/danmaku_settings_content.dart',
     ).readAsStringSync();
 
-    expect(
-      player,
-      matches(
-        RegExp(
-          r'title: "播放器内核",[\s\S]*?'
-          r'useNativeIOS26Dropdown: true,',
-        ),
-      ),
-    );
-    expect(
-      danmaku,
-      matches(
-        RegExp(
-          r"title: '弹幕渲染引擎',[\s\S]*?"
-          r'useNativeIOS26Dropdown: true,',
-        ),
-      ),
-    );
+    expect(adaptive, contains('if (usesNativeIOS26SettingsControls)'));
+    expect(adaptive, contains('AdaptivePopupMenuButton.widget<T>'));
+    expect(adaptive, contains('return BlurDropdown<T>('));
+    expect(adaptive, contains('final trigger = _PhoneMenuChip(label: label)'));
+    expect(adaptive, isNot(contains('CupertinoBottomSheet.showSelection')));
+    expect(adaptive, isNot(contains('useNativeIOS26Dropdown')));
+    expect(player, isNot(contains('useNativeIOS26Dropdown')));
+    expect(danmaku, isNot(contains('useNativeIOS26Dropdown')));
   });
 
   test('shared host selection has one model and adaptive renderers', () {
@@ -617,7 +612,8 @@ void main() {
     expect(qr, contains('MobileScanner('));
   });
 
-  test('obsolete appearance modes are removed and phone sections reorder', () {
+  test('appearance settings expose home section ordering outside television',
+      () {
     final appearance = File(
       'lib/settings/pages/appearance_settings_content.dart',
     ).readAsStringSync();
@@ -629,6 +625,14 @@ void main() {
     expect(appearance, isNot(contains('RecentWatchingStyle')));
     expect(appearance, isNot(contains('_detailModeDropdownKey')));
     expect(appearance, isNot(contains('_recentStyleDropdownKey')));
+    expect(
+      appearance,
+      contains(
+        RegExp(
+          r'if \(!globals\.isTelevision\) \.\.\.\[[\s\S]*?AdaptiveSettingsDragList<HomeSectionType>',
+        ),
+      ),
+    );
     expect(appearance, contains('AdaptiveSettingsDragList<HomeSectionType>'));
     expect(appearance, contains('onReorder: homeSections.reorderSections'));
     expect(general, isNot(contains('HomeSectionsSettingsProvider')));
@@ -1565,15 +1569,18 @@ void main() {
     final page = File(
       'lib/media_library/adaptive_media_library_page.dart',
     ).readAsStringSync();
+    final addMediaFlow = File(
+      'lib/media_library/adaptive_add_media_flow.dart',
+    ).readAsStringSync();
     final keys = File('lib/constants/settings_keys.dart').readAsStringSync();
 
     expect(keys, contains('mediaLibrarySelectedSection'));
     expect(page, contains('_restoreSelectedSection'));
     expect(page, contains('onSectionSelected: _selectSection'));
     expect(page, contains('_selectMountedMediaLibrarySection'));
-    expect(page, contains('MediaLibrarySectionIds.localManagement'));
-    expect(page, contains('MediaLibrarySectionIds.webdavManagement'));
-    expect(page, contains('MediaLibrarySectionIds.smbManagement'));
+    expect(addMediaFlow, contains('MediaLibrarySectionIds.localManagement'));
+    expect(addMediaFlow, contains('MediaLibrarySectionIds.webdavManagement'));
+    expect(addMediaFlow, contains('MediaLibrarySectionIds.smbManagement'));
   });
 
   test('shared media summaries hydrate covers without a 24 item cap', () {
@@ -1676,6 +1683,7 @@ void main() {
             mascotScale: const AlwaysStoppedAnimation<double>(1),
             onMascotTap: () {},
             onSelectFile: () {},
+            onAddMedia: () {},
             onOpenUrlInput: () {},
           ),
         ),
@@ -1685,6 +1693,43 @@ void main() {
     expect(find.byType(CupertinoButton), findsWidgets);
     expect(find.byType(CupertinoTextField), findsNothing);
     expect(find.byType(TextField), findsNothing);
+  });
+
+  testWidgets('television playback entry only offers URL and add media',
+      (tester) async {
+    var selectFileCount = 0;
+    var addMediaCount = 0;
+    var openUrlCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppDisplaySurfaceScope(
+          surface: AppDisplaySurface.television,
+          child: AdaptivePlaybackEntryView(
+            content: unifiedPlaybackEntryContent,
+            mascotScale: const AlwaysStoppedAnimation<double>(1),
+            onMascotTap: () {},
+            onSelectFile: () => selectFileCount += 1,
+            onAddMedia: () => addMediaCount += 1,
+            onOpenUrlInput: () => openUrlCount += 1,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('选择文件'), findsNothing);
+    expect(find.text(unifiedPlaybackEntryContent.selectFileDescription),
+        findsNothing);
+    expect(find.text(unifiedPlaybackEntryContent.enterUrlDescription),
+        findsOneWidget);
+    expect(find.text('输入链接'), findsOneWidget);
+    expect(find.text('添加媒体'), findsOneWidget);
+
+    await tester.tap(find.text('输入链接'));
+    await tester.tap(find.text('添加媒体'));
+    expect(openUrlCount, 1);
+    expect(addMediaCount, 1);
+    expect(selectFileCount, 0);
   });
 
   testWidgets('playback URL popup builds one adaptive phone form',

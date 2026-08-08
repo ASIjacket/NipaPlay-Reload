@@ -51,6 +51,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     }
 
     _clearPreviousVideoState(); // 清理旧状态
+    final initializationGeneration = _playbackGeneration;
     _playbackDetailContext = resolvedDetailContext;
     _statusMessages.clear(); // <--- 新增行：确保消息列表在开始时是空的
     _initialHistoryItem = historyItem;
@@ -114,7 +115,11 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       _notifyListeners();
     }
 
-    if (!kIsWeb && !isNetworkUrl && !isNewRemotePath && !isJellyfinStream && !isEmbyStream) {
+    if (!kIsWeb &&
+        !isNetworkUrl &&
+        !isNewRemotePath &&
+        !isJellyfinStream &&
+        !isEmbyStream) {
       // 使用FilePickerService处理文件路径问题
       if (isAndroidContentUri) {
         // Erika resolves SAF sources through Android's ContentResolver and
@@ -165,7 +170,11 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       debugPrint('检测到网络URL或流媒体: $videoPath');
     }
 
-    if (kIsWeb && !isNetworkUrl && !isNewRemotePath && !isJellyfinStream && !isEmbyStream) {
+    if (kIsWeb &&
+        !isNetworkUrl &&
+        !isNewRemotePath &&
+        !isJellyfinStream &&
+        !isEmbyStream) {
       final filePickerService = FilePickerService();
       if (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty) {
         if (videoPath.startsWith('blob:')) {
@@ -245,19 +254,23 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     }
 
     // 新格式远程路径 (webdav:// / smb://) 需要解析为实际的 HTTP URL
-    if (isNewRemotePath && (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty)) {
+    if (isNewRemotePath &&
+        (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty)) {
       try {
         if (MediaSourceUtils.isNewWebDavPath(videoPath)) {
-          resolvedActualPlayUrl = MediaSourceUtils.resolveWebDavPathToUrl(videoPath);
+          resolvedActualPlayUrl =
+              MediaSourceUtils.resolveWebDavPathToUrl(videoPath);
         } else if (MediaSourceUtils.isNewSmbPath(videoPath)) {
-          resolvedActualPlayUrl = MediaSourceUtils.resolveSmbPathToUrl(videoPath);
+          resolvedActualPlayUrl =
+              MediaSourceUtils.resolveSmbPathToUrl(videoPath);
         }
         if (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty) {
           _setStatus(PlayerStatus.error, message: '无法解析远程媒体路径，请检查连接配置');
           _error = '无法解析远程媒体路径';
           return;
         }
-        debugPrint('VideoPlayerState: 远程路径解析成功: $videoPath -> $resolvedActualPlayUrl');
+        debugPrint(
+            'VideoPlayerState: 远程路径解析成功: $videoPath -> $resolvedActualPlayUrl');
       } catch (e) {
         debugPrint('VideoPlayerState: 解析远程媒体路径失败: $e');
         _setStatus(PlayerStatus.error, message: '解析远程媒体路径失败: $e');
@@ -281,8 +294,17 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     _currentActualPlayUrl = resolvedActualPlayUrl; // 存储实际播放URL
     _currentPlaybackSession = resolvedSession;
     print('historyItem: $historyItem');
-    _animeTitle = historyItem?.animeName ?? resolvedDetailContext.title;
-    _episodeTitle = historyItem?.episodeTitle ?? resolvedDetailContext.subtitle;
+    // 仅当 historyItem 已被识别（有 animeId）时，其 animeName 才是可信的番剧名。
+    // WebDAV/SMB 的 _loadWebDavEpisodes/_loadSmbEpisodes 创建的占位记录中
+    // animeName 是文件名，animeId 为空。此时应使用 resolvedDetailContext 的 title。
+    _animeTitle = (historyItem != null && historyItem.animeId != null
+            ? historyItem.animeName
+            : null) ??
+        resolvedDetailContext.title;
+    _episodeTitle = (historyItem != null && historyItem.animeId != null
+            ? historyItem.episodeTitle
+            : null) ??
+        resolvedDetailContext.subtitle;
     _episodeId = historyItem?.episodeId; // 保存从历史记录传入的 episodeId
     _animeId = historyItem?.animeId ?? resolvedDetailContext.animeId;
     String message = '正在初始化播放器: ${p.basename(videoPath)}';
@@ -406,51 +428,66 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       // 准备播放器
       mediaPrepareStarted = true;
       await player.prepare();
-      mediaPrepareCompleted = true;
+      final bool isMediaServer = videoPath.startsWith('jellyfin://') ||
+          videoPath.startsWith('emby://');
+      final bool isNetworkMedia = isMediaServer ||
+          videoPath.startsWith('webdav://') ||
+          videoPath.startsWith('smb://') ||
+          playUrl.startsWith('http://') ||
+          playUrl.startsWith('https://');
 
-      // 针对Jellyfin流媒体，给予更长的初始化时间
-      final bool isJellyfinStreaming =
-          videoPath.contains('jellyfin://') || videoPath.contains('emby://');
-      final int initializationTimeout =
-          isJellyfinStreaming ? 30000 : 15000; // Jellyfin: 30秒, 其他: 15秒
-
-      debugPrint(
-        'VideoPlayerState: 播放器初始化超时设置: ${initializationTimeout}ms (${isJellyfinStreaming ? 'Jellyfin流媒体' : '本地文件'})',
-      );
-
-      // 等待播放器准备完成，设置超时
-      int waitCount = 0;
-      const int maxWaitCount = 100; // 最大等待次数
-      const int waitInterval = 100; // 每次等待100毫秒
-
-      while (waitCount < maxWaitCount) {
-        await Future.delayed(const Duration(milliseconds: waitInterval));
-        waitCount++;
-
-        // 检查播放器状态
-        if (player.state == PlaybackState.playing ||
-            player.state == PlaybackState.paused ||
-            (player.mediaInfo.duration > 0 &&
-                (player.prefersPlatformVideoSurface ||
-                    player.textureId.value != null))) {
-          debugPrint(
-            'VideoPlayerState: 播放器准备完成，等待时间: ${waitCount * waitInterval}ms',
-          );
-          break;
+      if (isMediaKitKernel && player.supportsMediaLoadReadiness) {
+        final readyStopwatch = Stopwatch()..start();
+        bool mediaReady = await player.waitUntilMediaReady(
+          timeout:
+              Duration(seconds: isMediaServer ? 30 : (isNetworkMedia ? 6 : 5)),
+        );
+        if (_isDisposed || initializationGeneration != _playbackGeneration) {
+          return;
         }
 
-        // 检查是否超时
-        if (waitCount * waitInterval >= initializationTimeout) {
-          debugPrint('VideoPlayerState: 播放器初始化超时 (${initializationTimeout}ms)');
-          if (isJellyfinStreaming) {
-            debugPrint('VideoPlayerState: Jellyfin流媒体初始化超时，但继续尝试播放');
-            // 对于Jellyfin流媒体，即使超时也继续尝试
-            break;
+        if (!mediaReady && isNetworkMedia && !isMediaServer) {
+          final retried = await player.retryCurrentMediaLoad();
+          if (retried) {
+            mediaReady = await player.waitUntilMediaReady(
+              timeout: const Duration(seconds: 10),
+            );
+            if (_isDisposed ||
+                initializationGeneration != _playbackGeneration) {
+              return;
+            }
           } else {
-            throw Exception('播放器初始化超时');
+            // Metadata may have arrived between the short deadline and the
+            // retry decision. Do not turn that successful recovery into an
+            // initialization error.
+            mediaReady = player.isMediaReady;
+          }
+        }
+
+        readyStopwatch.stop();
+        if (!mediaReady) {
+          final detail = player.mediaInfo.specificErrorMessage ??
+              player.mediaLoadError ??
+              (isNetworkMedia ? '网络媒体在重试后仍未返回有效数据' : '媒体未返回有效轨道或时长');
+          throw TimeoutException(detail);
+        }
+        debugPrint(
+          'VideoPlayerState: MediaKit媒体就绪，等待${readyStopwatch.elapsedMilliseconds}ms',
+        );
+      } else {
+        // 其他内核保持原有最多10秒的兼容轮询，不改变其启动体验。
+        for (var waitCount = 0; waitCount < 100; waitCount++) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          if (player.state == PlaybackState.playing ||
+              player.state == PlaybackState.paused ||
+              (player.mediaInfo.duration > 0 &&
+                  (player.prefersPlatformVideoSurface ||
+                      player.textureId.value != null))) {
+            break;
           }
         }
       }
+      mediaPrepareCompleted = true;
 
       //debugPrint('5. 获取视频纹理...');
       // 获取视频纹理
@@ -461,8 +498,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       _startUiUpdateTimer(); // 启动UI更新定时器（已包含位置保存功能）
       // !!!!! ------------------------------------------- !!!!!
 
-      // 等待纹理初始化完成
-      await Future.delayed(const Duration(milliseconds: 200));
+      // MediaKit已经通过真实metadata事件完成放行，无需再增加固定延迟。
+      if (!isMediaKitKernel) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
 
       //debugPrint('6. 分析媒体信息...');
       // 分析并打印媒体信息，特别是字幕轨道
@@ -717,7 +756,12 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         _position = Duration.zero;
         _progress = 0.0;
         _bufferedPositionMs = 0;
-        player.seek(position: 0);
+        // Erika has already opened at the beginning of the stream. Seeking to
+        // zero here needlessly tears down and recreates its hardware decoder
+        // (notably HarmonyOS AVCodec Surface output) before first playback.
+        if (player.getPlayerKernelName() != 'Erika') {
+          player.seek(position: 0);
+        }
       }
 
       // debugPrint('9. 检查播放器实际状态...');
@@ -959,22 +1003,27 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         debugPrint(
           'VideoPlayerState: Final check - Player IS NOT PLAYING. Current _status: $_status, player.state: ${player.state}',
         );
-        // 如果意图是播放 (无论是从头还是恢复)，但播放器最终没有播放，则设为暂停
+        // play() 通过 playDirectly() 异步启动播放器，底层状态转换需要时间。
+        // _status == ready 表示刚完成初始化、play() 已调用但异步结果尚未返回，
+        // 此时 player.state 可能在 paused/ready/stopped 之间，强制暂停会取消
+        // 正在进行的 playDirectly()，导致画面卡在第一帧、时间为 00:00。
+        // 只应在 _status 明确为 playing（即 play() 回调已确认播放在进行）而
+        // player.state 却未反映时才纠正。
         if (_status == PlayerStatus.playing) {
-          // 如果我们之前的意图是播放
+          // play() 的 .then() 已触发但底层状态未同步，强制暂停以保持一致
           player.state = PlaybackState.paused;
           _setStatus(PlayerStatus.paused, message: '已暂停 (播放失败后同步)');
           debugPrint(
             'VideoPlayerState: Corrected to PAUSED (sync after play attempt failed)',
           );
-        } else if (_status != PlayerStatus.paused) {
-          // 对于其他非播放且非暂停的意外状态，也强制为暂停
-          player.state = PlaybackState.paused;
-          _setStatus(PlayerStatus.paused, message: '已暂停 (状态同步)');
-          //debugPrint('VideoPlayerState: Corrected to PAUSED (general sync)');
         }
+        // _status 为 ready 时：play() 异步尚未完成，不干预，让底层自然过渡到播放。
+        // 若底层最终未进入播放，Ticker 的异常检测会捕获并设置 error 状态。
       }
     } catch (e) {
+      if (_isDisposed || initializationGeneration != _playbackGeneration) {
+        return;
+      }
       //debugPrint('初始化视频播放器时出错: $e');
       if (kIsWeb) {
         final errorText = e.toString();

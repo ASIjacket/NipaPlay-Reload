@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart' as cupertino;
 import 'package:flutter/material.dart' as material;
+import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
 import 'package:nipaplay/app/app_display_surface.dart';
 import 'package:nipaplay/app/app_display_surface_scope.dart';
 import 'package:nipaplay/app/unified_media_library_sections.dart';
@@ -14,11 +15,19 @@ import 'package:nipaplay/themes/cupertino/widgets/cupertino_media_source_sheet.d
 import 'package:nipaplay/themes/nipaplay/widgets/dandanplay_remote_library_view.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/library_management_tab.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_view_container.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/media_server_selection_sheet.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_library_view.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/nipaplay_main_tab_bar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/shared_remote_library_view.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
+import 'package:nipaplay/services/large_screen_ui_sfx_service.dart';
+import 'package:nipaplay/widgets/in_view_dialog.dart';
+import 'package:provider/provider.dart';
 
 class AdaptiveMediaLibraryScaffold extends material.StatelessWidget {
   const AdaptiveMediaLibraryScaffold({
@@ -42,6 +51,17 @@ class AdaptiveMediaLibraryScaffold extends material.StatelessWidget {
 
   @override
   material.Widget build(material.BuildContext context) {
+    if (_useTelevisionMediaLibraryLayout(context)) {
+      return _TelevisionMediaLibraryScaffold(
+        sections: sections,
+        selectedSection: selectedSection,
+        onSectionSelected: onSectionSelected,
+        onSectionOrderChanged: onSectionOrderChanged,
+        onRemoteAccess: onRemoteAccess,
+        onAddMedia: onAddMedia,
+        child: child,
+      );
+    }
     return switch (AppDisplaySurfaceScope.of(context)) {
       AppDisplaySurface.phone => _CupertinoMediaLibraryScaffold(
           sections: sections,
@@ -62,6 +82,252 @@ class AdaptiveMediaLibraryScaffold extends material.StatelessWidget {
           child: child,
         ),
     };
+  }
+}
+
+bool _useTelevisionMediaLibraryLayout(material.BuildContext context) {
+  return AppDisplaySurfaceScope.of(context) == AppDisplaySurface.television ||
+      NipaplayLargeScreenModeScope.isActiveOf(context);
+}
+
+class _TelevisionMediaLibraryScaffold extends material.StatelessWidget {
+  const _TelevisionMediaLibraryScaffold({
+    required this.sections,
+    required this.selectedSection,
+    required this.onSectionSelected,
+    required this.onSectionOrderChanged,
+    required this.onRemoteAccess,
+    required this.onAddMedia,
+    required this.child,
+  });
+
+  final List<UnifiedMediaLibrarySection> sections;
+  final UnifiedMediaLibrarySection selectedSection;
+  final material.ValueChanged<String> onSectionSelected;
+  final material.ValueChanged<List<String>> onSectionOrderChanged;
+  final material.VoidCallback onRemoteAccess;
+  final material.VoidCallback onAddMedia;
+  final material.Widget child;
+
+  @override
+  material.Widget build(material.BuildContext context) {
+    return NipaplayLargeScreenModeScope(
+      isActive: true,
+      child: NipaplayLargeScreenPageScaffold(
+        key: const material.ValueKey<String>('television-media-library'),
+        title: '媒体库',
+        subtitle: '${selectedSection.label} · 使用方向键浏览，按确认键打开',
+        icon: material.Icons.video_library_rounded,
+        padding: const material.EdgeInsets.fromLTRB(30, 24, 30, 30),
+        headerBottomSpacing: 16,
+        actions: [
+          NipaplayLargeScreenActionButton(
+            icon: material.Icons.swap_vert_rounded,
+            label: '调整顺序',
+            onPressed: () => _showSectionOrderEditor(
+              context,
+              sections,
+              onSectionOrderChanged,
+            ),
+          ),
+          NipaplayLargeScreenActionButton(
+            icon: material.Icons.link_rounded,
+            label: '远程访问',
+            onPressed: onRemoteAccess,
+          ),
+          NipaplayLargeScreenActionButton(
+            icon: material.Icons.add_to_queue_rounded,
+            label: '添加媒体',
+            onPressed: onAddMedia,
+          ),
+        ],
+        child: material.Column(
+          crossAxisAlignment: material.CrossAxisAlignment.stretch,
+          children: [
+            NipaplayLargeScreenPanel(
+              padding: const material.EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 8,
+              ),
+              child: _TelevisionMediaLibrarySectionBar(
+                sections: sections,
+                selectedSection: selectedSection,
+                onSectionSelected: onSectionSelected,
+              ),
+            ),
+            const material.SizedBox(height: 16),
+            // 将搜索框行和媒体项放在同一个遍历组中，
+            // 确保从媒体项向上导航时先到达搜索框行，而不是跳到分区栏。
+            material.Expanded(
+              child: material.FocusTraversalGroup(
+                policy: material.ReadingOrderTraversalPolicy(),
+                child: child,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 媒体库分区选择栏：整体可聚焦，焦点在上时左右直接切换分区，
+/// 按上/下/Enter退出分区栏焦点。无焦点框，仅高亮当前选中分区。
+class _TelevisionMediaLibrarySectionBar extends material.StatefulWidget {
+  const _TelevisionMediaLibrarySectionBar({
+    required this.sections,
+    required this.selectedSection,
+    required this.onSectionSelected,
+  });
+
+  final List<UnifiedMediaLibrarySection> sections;
+  final UnifiedMediaLibrarySection selectedSection;
+  final material.ValueChanged<String> onSectionSelected;
+
+  @override
+  material.State<_TelevisionMediaLibrarySectionBar> createState() =>
+      _TelevisionMediaLibrarySectionBarState();
+}
+
+class _TelevisionMediaLibrarySectionBarState
+    extends material.State<_TelevisionMediaLibrarySectionBar> {
+  late final material.FocusNode _focusNode;
+  final material.ScrollController _scrollController = material.ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = material.FocusNode(debugLabel: 'media-library-section-bar');
+    _focusNode.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_onFocusChange);
+    _focusNode.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    // 焦点进入分区栏时不需要额外操作
+  }
+
+  void _stepSection(int step) {
+    final sections = widget.sections;
+    if (sections.length <= 1) return;
+    final currentIndex = sections.indexWhere(
+      (s) => s.id == widget.selectedSection.id,
+    );
+    var targetIndex = currentIndex + step;
+    if (targetIndex < 0) targetIndex = sections.length - 1;
+    if (targetIndex >= sections.length) targetIndex = 0;
+    widget.onSectionSelected(sections[targetIndex].id);
+  }
+
+  material.KeyEventResult _handleKeyEvent(
+      material.FocusNode node, material.KeyEvent event) {
+    if (event is! KeyDownEvent) return material.KeyEventResult.ignored;
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      context.read<LargeScreenUiSfxService>().playTabSwitch();
+      _stepSection(-1);
+      return material.KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      context.read<LargeScreenUiSfxService>().playTabSwitch();
+      _stepSection(1);
+      return material.KeyEventResult.handled;
+    }
+    // 上/下/Enter：让焦点离开分区栏，进入内容区
+    if (key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.select) {
+      return material.KeyEventResult.ignored;
+    }
+    return material.KeyEventResult.ignored;
+  }
+
+  @override
+  material.Widget build(material.BuildContext context) {
+    return material.SizedBox(
+      height: 58,
+      child: material.Focus(
+        focusNode: _focusNode,
+        onKeyEvent: _handleKeyEvent,
+        // 子控件不可单独聚焦，整个分区栏作为一个焦点单元
+        descendantsAreFocusable: false,
+        child: material.ListView.separated(
+          controller: _scrollController,
+          scrollDirection: material.Axis.horizontal,
+          physics: const material.ClampingScrollPhysics(),
+          itemCount: widget.sections.length,
+          separatorBuilder: (_, __) =>
+              const material.SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final section = widget.sections[index];
+            final selected = section.id == widget.selectedSection.id;
+            return _TelevisionMediaLibrarySectionButton(
+              section: section,
+              selected: selected,
+              onPressed: () => widget.onSectionSelected(section.id),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _TelevisionMediaLibrarySectionButton extends material.StatelessWidget {
+  const _TelevisionMediaLibrarySectionButton({
+    required this.section,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final UnifiedMediaLibrarySection section;
+  final bool selected;
+  final material.VoidCallback onPressed;
+
+  @override
+  material.Widget build(material.BuildContext context) {
+    final foreground = selected
+        ? material.Colors.white
+        : material.Theme.of(context).colorScheme.onSurface;
+    final background =
+        selected ? AppAccentColors.current : material.Colors.transparent;
+    // 不使用 NipaplayLargeScreenFocusableAction，避免焦点框。
+    // 分区栏整体可聚焦，焦点在上时左右键直接切换。
+    return material.GestureDetector(
+      onTap: onPressed,
+      child: material.AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const material.EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: material.BoxDecoration(
+          color: background,
+          borderRadius: material.BorderRadius.circular(9),
+        ),
+        child: material.Row(
+          mainAxisSize: material.MainAxisSize.min,
+          children: [
+            material.Icon(_mediaLibrarySectionIcon(section),
+                size: 21, color: foreground),
+            const material.SizedBox(width: 9),
+            material.Text(
+              section.label,
+              style: material.TextStyle(
+                fontSize: 15,
+                fontWeight: material.FontWeight.w800,
+                color: foreground,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -318,7 +584,7 @@ class _DesktopSectionButton extends material.StatelessWidget {
             material.Row(
               mainAxisSize: material.MainAxisSize.min,
               children: [
-                material.Icon(_desktopIcon(section), size: 18),
+                material.Icon(_mediaLibrarySectionIcon(section), size: 18),
                 const material.SizedBox(width: 7),
                 material.Text(section.label, style: labelStyle),
               ],
@@ -334,23 +600,24 @@ class _DesktopSectionButton extends material.StatelessWidget {
       ),
     );
   }
+}
 
-  material.IconData _desktopIcon(UnifiedMediaLibrarySection section) {
-    return switch (section.contentType) {
-      UnifiedMediaLibraryContentType.mediaCollection =>
-        material.Icons.video_library_outlined,
-      UnifiedMediaLibraryContentType.libraryManagement =>
-        material.Icons.folder_open_outlined,
-      UnifiedMediaLibraryContentType.sharedCollection =>
-        material.Icons.devices_other_outlined,
-      UnifiedMediaLibraryContentType.sharedManagement =>
-        material.Icons.settings_suggest_outlined,
-      UnifiedMediaLibraryContentType.dandanplay =>
-        material.Icons.live_tv_outlined,
-      UnifiedMediaLibraryContentType.networkServer =>
-        material.Icons.dns_outlined,
-    };
-  }
+material.IconData _mediaLibrarySectionIcon(
+  UnifiedMediaLibrarySection section,
+) {
+  return switch (section.contentType) {
+    UnifiedMediaLibraryContentType.mediaCollection =>
+      material.Icons.video_library_outlined,
+    UnifiedMediaLibraryContentType.libraryManagement =>
+      material.Icons.folder_open_outlined,
+    UnifiedMediaLibraryContentType.sharedCollection =>
+      material.Icons.devices_other_outlined,
+    UnifiedMediaLibraryContentType.sharedManagement =>
+      material.Icons.settings_suggest_outlined,
+    UnifiedMediaLibraryContentType.dandanplay =>
+      material.Icons.live_tv_outlined,
+    UnifiedMediaLibraryContentType.networkServer => material.Icons.dns_outlined,
+  };
 }
 
 class _CupertinoMediaLibraryScaffold extends material.StatelessWidget {
@@ -433,6 +700,18 @@ Future<List<String>?> showAdaptiveMediaLibrarySectionOrder(
   material.BuildContext context,
   List<UnifiedMediaLibrarySection> sections,
 ) {
+  if (_useTelevisionMediaLibraryLayout(context)) {
+    return NipaplayLargeScreenViewContainer.show<List<String>>(
+      context: context,
+      title: '媒体库顺序',
+      subtitle: '使用每一行右侧的按钮调整位置',
+      maxWidth: 820,
+      maxHeightFactor: 0.82,
+      builder: (_) => _TelevisionMediaLibrarySectionOrderEditor(
+        sections: sections,
+      ),
+    );
+  }
   if (AppDisplaySurfaceScope.of(context) == AppDisplaySurface.phone) {
     return CupertinoBottomSheet.show<List<String>>(
       context: context,
@@ -451,7 +730,7 @@ Future<List<String>?> showAdaptiveMediaLibrarySectionOrder(
     );
   }
 
-  return material.showDialog<List<String>>(
+  return showInViewDialog<List<String>>(
     context: context,
     builder: (dialogContext) {
       final viewport = material.MediaQuery.sizeOf(dialogContext);
@@ -478,6 +757,102 @@ Future<List<String>?> showAdaptiveMediaLibrarySectionOrder(
       );
     },
   );
+}
+
+class _TelevisionMediaLibrarySectionOrderEditor
+    extends material.StatefulWidget {
+  const _TelevisionMediaLibrarySectionOrderEditor({required this.sections});
+
+  final List<UnifiedMediaLibrarySection> sections;
+
+  @override
+  material.State<_TelevisionMediaLibrarySectionOrderEditor> createState() =>
+      _TelevisionMediaLibrarySectionOrderEditorState();
+}
+
+class _TelevisionMediaLibrarySectionOrderEditorState
+    extends material.State<_TelevisionMediaLibrarySectionOrderEditor> {
+  late List<UnifiedMediaLibrarySection> _sections;
+
+  @override
+  void initState() {
+    super.initState();
+    _sections = List<UnifiedMediaLibrarySection>.of(widget.sections);
+  }
+
+  void _move(int index, int delta) {
+    final nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= _sections.length) return;
+    setState(() {
+      final section = _sections.removeAt(index);
+      _sections.insert(nextIndex, section);
+    });
+  }
+
+  @override
+  material.Widget build(material.BuildContext context) {
+    return material.Padding(
+      padding: const material.EdgeInsets.fromLTRB(22, 20, 22, 22),
+      child: material.Column(
+        children: [
+          material.Expanded(
+            child: material.ListView.separated(
+              itemCount: _sections.length,
+              separatorBuilder: (_, __) => const material.SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final section = _sections[index];
+                return NipaplayLargeScreenPanel(
+                  padding: const material.EdgeInsets.fromLTRB(16, 9, 9, 9),
+                  child: material.Row(
+                    children: [
+                      material.Icon(
+                        _mediaLibrarySectionIcon(section),
+                        size: 24,
+                      ),
+                      const material.SizedBox(width: 13),
+                      material.Expanded(
+                        child: material.Text(
+                          section.label,
+                          style: const material.TextStyle(
+                            fontSize: 16,
+                            fontWeight: material.FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      NipaplayLargeScreenIconButton(
+                        icon: material.Icons.arrow_upward_rounded,
+                        tooltip: '上移 ${section.label}',
+                        onPressed: index == 0 ? null : () => _move(index, -1),
+                      ),
+                      const material.SizedBox(width: 8),
+                      NipaplayLargeScreenIconButton(
+                        icon: material.Icons.arrow_downward_rounded,
+                        tooltip: '下移 ${section.label}',
+                        onPressed: index == _sections.length - 1
+                            ? null
+                            : () => _move(index, 1),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          const material.SizedBox(height: 16),
+          material.Align(
+            alignment: material.Alignment.centerRight,
+            child: NipaplayLargeScreenActionButton(
+              icon: material.Icons.check_rounded,
+              label: '保存顺序',
+              onPressed: () => material.Navigator.of(context).pop(
+                _sections.map((section) => section.id).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _MediaLibrarySectionOrderEditor extends material.StatefulWidget {
@@ -539,7 +914,7 @@ class _MediaLibrarySectionOrderEditorState
           child: material.ReorderableListView.builder(
             buildDefaultDragHandles: false,
             itemCount: _sections.length,
-            onReorderItem: _reorder,
+            onReorder: _reorder,
             itemBuilder: (context, index) {
               final section = _sections[index];
               return material.Padding(
@@ -619,15 +994,145 @@ class _MediaLibrarySectionOrderEditorState
 }
 
 Future<String?> showAdaptiveMediaSourcePicker(material.BuildContext context) {
+  final options = availableMediaSourceOptions(
+    isTelevision: globals.isTelevision,
+  );
+  if (_useTelevisionMediaLibraryLayout(context)) {
+    return NipaplayLargeScreenViewContainer.show<String>(
+      context: context,
+      title: '添加媒体',
+      subtitle: '选择要连接的媒体来源',
+      maxWidth: 960,
+      maxHeightFactor: 0.82,
+      autofocusClose: false,
+      builder: (_) => _TelevisionMediaSourcePicker(options: options),
+    );
+  }
   if (AppDisplaySurfaceScope.of(context) != AppDisplaySurface.phone) {
     return MediaServerSelectionSheet.show(
       context,
-      options: mediaSourceOptions,
+      options: options,
     );
   }
 
   return CupertinoMediaSourceSheet.show(
     context,
-    options: mediaSourceOptions,
+    options: options,
   );
+}
+
+class _TelevisionMediaSourcePicker extends material.StatelessWidget {
+  const _TelevisionMediaSourcePicker({required this.options});
+
+  final List<MediaSourceOption> options;
+
+  @override
+  material.Widget build(material.BuildContext context) {
+    final textColor = material.Theme.of(context).colorScheme.onSurface;
+    return material.SingleChildScrollView(
+      padding: const material.EdgeInsets.fromLTRB(24, 20, 24, 28),
+      child: material.Column(
+        crossAxisAlignment: material.CrossAxisAlignment.stretch,
+        children: [
+          for (final category in MediaSourceCategory.values)
+            if (options.any(
+              (option) => option.category == category,
+            )) ...[
+              material.Text(
+                category.label,
+                style: material.TextStyle(
+                  color: textColor.withValues(alpha: 0.68),
+                  fontSize: 15,
+                  fontWeight: material.FontWeight.w800,
+                ),
+              ),
+              const material.SizedBox(height: 10),
+              material.LayoutBuilder(
+                builder: (context, constraints) {
+                  const spacing = 12.0;
+                  final itemWidth = (constraints.maxWidth - spacing) / 2;
+                  final categoryOptions = options
+                      .where((option) => option.category == category)
+                      .toList(growable: false);
+                  return material.Wrap(
+                    spacing: spacing,
+                    runSpacing: spacing,
+                    children: [
+                      for (final option in categoryOptions)
+                        material.SizedBox(
+                          width: itemWidth,
+                          child: NipaplayLargeScreenFocusableAction(
+                            autofocus: option == options.first,
+                            onActivate: () =>
+                                material.Navigator.of(context).pop(option.id),
+                            borderRadius: material.BorderRadius.circular(10),
+                            focusScale: 1.025,
+                            padding: const material.EdgeInsets.all(16),
+                            child: material.Row(
+                              children: [
+                                material.Icon(
+                                  _mediaSourceIcon(option.iconKind),
+                                  size: 32,
+                                  color: AppAccentColors.current,
+                                ),
+                                const material.SizedBox(width: 14),
+                                material.Expanded(
+                                  child: material.Column(
+                                    crossAxisAlignment:
+                                        material.CrossAxisAlignment.start,
+                                    children: [
+                                      material.Text(
+                                        option.title,
+                                        style: const material.TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: material.FontWeight.w900,
+                                        ),
+                                      ),
+                                      const material.SizedBox(height: 4),
+                                      material.Text(
+                                        option.subtitle,
+                                        maxLines: 1,
+                                        overflow:
+                                            material.TextOverflow.ellipsis,
+                                        style: material.TextStyle(
+                                          color: textColor.withValues(
+                                            alpha: 0.62,
+                                          ),
+                                          fontSize: 13,
+                                          fontWeight: material.FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const material.SizedBox(width: 8),
+                                const material.Icon(
+                                  material.Icons.chevron_right_rounded,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+              const material.SizedBox(height: 20),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+material.IconData _mediaSourceIcon(MediaSourceIconKind kind) {
+  return switch (kind) {
+    MediaSourceIconKind.localFolder => material.Icons.folder_open_rounded,
+    MediaSourceIconKind.nipaplay => material.Icons.devices_rounded,
+    MediaSourceIconKind.jellyfin => material.Icons.movie_filter_rounded,
+    MediaSourceIconKind.dandanplay => material.Icons.live_tv_rounded,
+    MediaSourceIconKind.emby => material.Icons.video_library_rounded,
+    MediaSourceIconKind.webdav => material.Icons.cloud_rounded,
+    MediaSourceIconKind.smb => material.Icons.lan_rounded,
+  };
 }

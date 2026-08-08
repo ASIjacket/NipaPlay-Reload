@@ -1,4 +1,9 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nipaplay/settings/adaptive_settings_widgets.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
@@ -11,13 +16,15 @@ import 'package:nipaplay/services/auto_sync_service.dart';
 import 'package:nipaplay/services/multi_address_server_service.dart';
 import 'package:nipaplay/services/webdav_service.dart';
 import 'package:nipaplay/services/smb_service.dart';
+import 'package:nipaplay/services/system_share_service.dart';
 import 'package:nipaplay/services/dandanplay_remote_service.dart';
 import 'package:nipaplay/utils/auto_sync_settings.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/utils/backup_file_type_groups.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:provider/provider.dart';
 import 'package:nipaplay/providers/watch_history_provider.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 class BackupRestorePage extends StatefulWidget {
@@ -31,6 +38,17 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
   bool _isProcessing = false;
   bool _autoSyncEnabled = false;
   String? _autoSyncPath;
+
+  bool get _useIosDocumentExporter => !kIsWeb && Platform.isIOS;
+
+  Future<String> _createIosBackupExportPath(String fileName) async {
+    final temporaryDirectory = await getTemporaryDirectory();
+    final exportDirectory = Directory(
+      path.join(temporaryDirectory.path, 'nipaplay_backup_exports'),
+    );
+    await exportDirectory.create(recursive: true);
+    return path.join(exportDirectory.path, fileName);
+  }
 
   @override
   void initState() {
@@ -83,8 +101,9 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
   }
 
   Future<void> _selectAutoSyncPath() async {
-    final String? selectedDirectory =
-        await FilePicker.platform.getDirectoryPath();
+    final String? selectedDirectory = await getDirectoryPath(
+      confirmButtonText: '选择同步目录',
+    );
 
     if (selectedDirectory == null) {
       _showMessage('未选择同步路径');
@@ -189,11 +208,25 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
 
     if (result == null || result.isEmpty) return;
 
-    // 选择保存位置
-    final String? selectedDirectory =
-        await FilePicker.platform.getDirectoryPath();
+    final backupService = FullBackupService();
+    String? selectedDirectory;
+    String? selectedFilePath;
+    try {
+      if (_useIosDocumentExporter) {
+        selectedFilePath = await _createIosBackupExportPath(
+          backupService.buildBackupFileName(result),
+        );
+      } else {
+        selectedDirectory = await getDirectoryPath(
+          confirmButtonText: '选择保存位置',
+        );
+      }
+    } catch (error) {
+      _showMessage('备份失败: $error', isError: true);
+      return;
+    }
 
-    if (selectedDirectory == null) {
+    if (selectedDirectory == null && selectedFilePath == null) {
       _showMessage('未选择保存位置');
       return;
     }
@@ -209,15 +242,25 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
         appVersion = packageInfo.version;
       } catch (_) {}
 
-      final backupService = FullBackupService();
-      final filePath = await backupService.exportBackup(
-        directoryPath: selectedDirectory,
-        categories: result,
-        appVersion: appVersion,
-      );
+      final filePath = selectedFilePath != null
+          ? await backupService.exportBackupToFile(
+              filePath: selectedFilePath,
+              categories: result,
+              appVersion: appVersion,
+            )
+          : await backupService.exportBackup(
+              directoryPath: selectedDirectory!,
+              categories: result,
+              appVersion: appVersion,
+            );
 
       if (filePath != null) {
-        _showMessage('备份成功！文件保存至: $filePath');
+        if (_useIosDocumentExporter) {
+          await SystemShareService.exportFile(filePath);
+          _showMessage('备份已生成，请在系统文件选择器中选择保存位置');
+        } else {
+          _showMessage('备份成功！文件保存至: $filePath');
+        }
       } else {
         _showMessage('备份失败', isError: true);
       }
@@ -234,17 +277,32 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
 
   Future<void> _showFullRestoreDialog() async {
     // 选择备份文件
-    final FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['npb'],
-    );
+    XFile? file;
+    try {
+      file = await openFile(
+        acceptedTypeGroups: [
+          buildBackupFileTypeGroup(
+            label: 'NipaPlay 完整备份',
+            extension: 'npb',
+          ),
+        ],
+      );
+    } catch (e) {
+      _showMessage('无法打开系统文件选择器: $e', isError: true);
+      return;
+    }
 
-    if (result == null || result.files.single.path == null) {
+    if (file == null) {
       _showMessage('未选择文件');
       return;
     }
 
-    final filePath = result.files.single.path!;
+    if (!hasBackupFileExtension(file.path, 'npb')) {
+      _showMessage('请选择 .npb 格式的完整备份文件', isError: true);
+      return;
+    }
+
+    final filePath = file.path;
 
     // 预览备份内容
     final backupService = FullBackupService();
@@ -348,19 +406,35 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
     });
 
     try {
-      final String? selectedDirectory =
-          await FilePicker.platform.getDirectoryPath();
+      final backupService = BackupService();
+      String? selectedDirectory;
+      String? selectedFilePath;
+      if (_useIosDocumentExporter) {
+        selectedFilePath = await _createIosBackupExportPath(
+          backupService.buildWatchHistoryBackupFileName(),
+        );
+      } else {
+        selectedDirectory = await getDirectoryPath(
+          confirmButtonText: '选择保存位置',
+        );
+      }
 
-      if (selectedDirectory == null) {
+      if (selectedDirectory == null && selectedFilePath == null) {
         _showMessage('未选择保存位置');
         return;
       }
 
-      final backupService = BackupService();
-      final result = await backupService.exportWatchHistory(selectedDirectory);
+      final result = selectedFilePath != null
+          ? await backupService.exportWatchHistoryToFile(selectedFilePath)
+          : await backupService.exportWatchHistory(selectedDirectory!);
 
       if (result != null) {
-        _showMessage('备份成功！文件保存至: $result');
+        if (_useIosDocumentExporter) {
+          await SystemShareService.exportFile(result);
+          _showMessage('备份已生成，请在系统文件选择器中选择保存位置');
+        } else {
+          _showMessage('备份成功！文件保存至: $result');
+        }
       } else {
         _showMessage('备份失败', isError: true);
       }
@@ -379,17 +453,26 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
     });
 
     try {
-      final FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['nph'],
+      final XFile? file = await openFile(
+        acceptedTypeGroups: [
+          buildBackupFileTypeGroup(
+            label: 'NipaPlay 历史备份',
+            extension: 'nph',
+          ),
+        ],
       );
 
-      if (result == null || result.files.single.path == null) {
+      if (file == null) {
         _showMessage('未选择文件');
         return;
       }
 
-      final filePath = result.files.single.path!;
+      if (!hasBackupFileExtension(file.path, 'nph')) {
+        _showMessage('请选择 .nph 格式的观看记录备份文件', isError: true);
+        return;
+      }
+
+      final filePath = file.path;
 
       if (!mounted) return;
       final confirmed = await BlurDialog.show<bool>(
@@ -707,8 +790,7 @@ class _BackupSelectionDialogState extends State<_BackupSelectionDialog> {
               children: [
                 HoverScaleTextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child:
-                      const Text('取消'),
+                  child: const Text('取消'),
                 ),
                 const SizedBox(width: 16),
                 HoverScaleTextButton(
@@ -721,8 +803,7 @@ class _BackupSelectionDialogState extends State<_BackupSelectionDialog> {
                           Navigator.of(context).pop(selected);
                         }
                       : null,
-                  child:
-                      const Text('确定'),
+                  child: const Text('确定'),
                 ),
               ],
             ),
@@ -1004,8 +1085,7 @@ class _RestoreSelectionDialogState extends State<_RestoreSelectionDialog> {
               children: [
                 HoverScaleTextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child:
-                      const Text('取消'),
+                  child: const Text('取消'),
                 ),
                 const SizedBox(width: 16),
                 HoverScaleTextButton(
@@ -1018,8 +1098,7 @@ class _RestoreSelectionDialogState extends State<_RestoreSelectionDialog> {
                           Navigator.of(context).pop(selected);
                         }
                       : null,
-                  child:
-                      const Text('确定'),
+                  child: const Text('确定'),
                 ),
               ],
             ),

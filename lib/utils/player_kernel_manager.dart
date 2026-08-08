@@ -5,6 +5,7 @@ import '../player_abstraction/player_factory.dart';
 import '../player_abstraction/player_abstraction.dart';
 import '../danmaku_abstraction/danmaku_kernel_factory.dart';
 import '../danmaku_next/next2_platform_support.dart';
+import 'globals.dart' as globals;
 import 'package:nipaplay/constants/settings_keys.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'video_player_state.dart';
@@ -68,6 +69,10 @@ class PlayerKernelManager {
       await videoPlayerState.applyPrecacheBufferSettings();
       if (videoPlayerState.isDisposed) return;
       await videoPlayerState.applySubtitleStylePreference();
+      // 恢复音量到新播放器，避免默认 1.0 导致下次播放音量异常
+      if (!(Platform.isAndroid || Platform.isIOS)) {
+        videoPlayerState.player.volume = currentVolume;
+      }
       debugPrint('[PlayerKernelManager] 已创建新的空播放器实例');
       return;
     }
@@ -214,6 +219,10 @@ class PlayerKernelManager {
     if (kIsWeb) {
       // Web平台只支持特定内核
       return ['Video Player'];
+    } else if (globals.isTelevision) {
+      return ['Erika'];
+    } else if (PlayerFactory.isHarmonyOS) {
+      return ['FVP', 'Erika'];
     } else if (Platform.isIOS) {
       // iOS平台支持的内核
       return ['FVP', 'Video Player', 'Erika'];
@@ -237,18 +246,20 @@ class PlayerKernelManager {
 
   /// 获取当前播放器内核
   static Future<String> getCurrentPlayerKernel() async {
+    if (globals.isTelevision) return 'Erika';
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('player_kernel') ?? 'FVP';
   }
 
   /// 设置播放器内核
   static Future<void> setPlayerKernel(String kernel) async {
+    final resolvedKernel = globals.isTelevision ? 'Erika' : kernel;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('player_kernel', kernel);
+    await prefs.setString('player_kernel', resolvedKernel);
 
     // 转换为枚举值
     PlayerKernelType kernelType;
-    switch (kernel) {
+    switch (resolvedKernel) {
       case 'FVP':
         kernelType = PlayerKernelType.mdk;
         break;
@@ -390,6 +401,9 @@ class PlayerKernelManager {
   static String _getPlatformInfo() {
     if (kIsWeb) return 'Web';
     if (Platform.isAndroid) return 'Android';
+    if (globals.isTelevision) {
+      return globals.isAndroidTv ? 'Android TV' : 'tvOS';
+    }
     if (Platform.isIOS) return 'iOS';
     if (Platform.isWindows) return 'Windows';
     if (Platform.isMacOS) return 'macOS';

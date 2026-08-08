@@ -12,8 +12,10 @@ import 'package:nipaplay/services/emby_episode_mapping_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tvos_remote_text_input_scope.dart';
 import 'package:nipaplay/utils/remote_media_fetcher.dart';
 import 'package:nipaplay/providers/settings_provider.dart';
+import 'package:nipaplay/widgets/in_view_dialog.dart';
 import 'package:provider/provider.dart';
 
 /// 负责将Emby媒体与DandanPlay的内容匹配，以获取弹幕和元数据
@@ -381,7 +383,7 @@ class EmbyDandanplayMatcher {
         // 显示匹配对话框，让用户手动选择
         debugPrint(
             '显示选择对话框 (有  [38;5;246m [48;5;236m${animeMatches.length} [0m 个预搜索候选项)');
-        final dialogResult = await showDialog<Map<String, dynamic>>(
+        final dialogResult = await showInViewDialog<Map<String, dynamic>>(
           context: context,
           barrierDismissible: false, // Make it modal, like Jellyfin's
           builder: (context) => AnimeMatchDialog(
@@ -493,7 +495,7 @@ class EmbyDandanplayMatcher {
       // 自动选择模式下，如果预搜索为空，则回退弹窗让用户手动搜索
       if (selectedMatch == null && showMatchDialog && autoPickOnHashFail) {
         debugPrint('自动选择失败（无候选项），回退弹幕匹配弹窗');
-        final dialogResult = await showDialog<Map<String, dynamic>>(
+        final dialogResult = await showInViewDialog<Map<String, dynamic>>(
           context: context,
           barrierDismissible: false,
           builder: (context) => AnimeMatchDialog(
@@ -1481,28 +1483,31 @@ class _AnimeMatchDialogState extends State<AnimeMatchDialog> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: TextField(
-                          controller: _searchController,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: '手动搜索动画名称',
-                            hintStyle:
-                                TextStyle(color: Colors.white.withOpacity(0.6)),
-                            isDense: true,
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.3)),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(0.3)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
+                        child: TvOSRemoteTextInputControl(
+                          title: '手动搜索动画名称',
+                          child: TextField(
+                            controller: _searchController,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: '手动搜索动画名称',
+                              hintStyle: TextStyle(
                                   color: Colors.white.withOpacity(0.6)),
+                              isDense: true,
+                              border: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                    color: Colors.white.withOpacity(0.3)),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                    color: Colors.white.withOpacity(0.3)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                    color: Colors.white.withOpacity(0.6)),
+                              ),
                             ),
+                            onSubmitted: (_) => _performSearch(),
                           ),
-                          onSubmitted: (_) => _performSearch(),
                         ),
                       ),
                       const SizedBox(width: 8),

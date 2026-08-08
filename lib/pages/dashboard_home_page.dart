@@ -23,11 +23,15 @@ import 'package:nipaplay/services/dandanplay_service.dart';
 import 'package:nipaplay/services/scan_service.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
 import 'package:nipaplay/services/random_recommendation_service.dart';
+import 'package:nipaplay/services/trending_bangumi_service.dart';
 import 'package:nipaplay/models/jellyfin_model.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/bangumi_model.dart';
+import 'package:nipaplay/models/trending_bangumi.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_card.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_skeleton.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
@@ -74,6 +78,7 @@ part '../themes/nipaplay/widgets/dashboard_home_page_actions.dart';
 part '../themes/nipaplay/widgets/dashboard_home_page_image_helpers.dart';
 part '../themes/nipaplay/widgets/dashboard_home_page_models.dart';
 part '../themes/nipaplay/widgets/dashboard_home_page_random_recommendations.dart';
+part '../themes/nipaplay/widgets/dashboard_home_page_trending.dart';
 part '../themes/cupertino/widgets/cupertino_home_page_controls.dart';
 
 class DashboardHomePage extends StatefulWidget {
@@ -114,6 +119,7 @@ class _DashboardHomePageState extends State<DashboardHomePage>
       onActivate: onActivate,
       borderRadius: borderRadius,
       padding: padding,
+      focusScale: 1,
       child: child,
     );
   }
@@ -181,6 +187,17 @@ class _DashboardHomePageState extends State<DashboardHomePage>
   bool _isLoadingTodayAnimes = false;
   ScrollController? _todayAnimesScrollController;
 
+  // 排行榜数据
+  TrendingRankingKind _trendingKind = TrendingRankingKind.allHot;
+  TrendingPeriod _trendingPeriod = TrendingPeriod.week;
+  TrendingNewAnimeScope _trendingScope = TrendingNewAnimeScope.currentSeason;
+  final Map<String, TrendingBangumiResult> _trendingResults = {};
+  final Set<String> _trendingLoadingKeys = {};
+  String? _trendingError;
+  ScrollController? _trendingScrollController;
+
+  void _updateTrendingState(VoidCallback update) => setState(update);
+
   // 随机推荐数据
   List<RandomRecommendationItem> _randomRecommendations = [];
   List<RandomRecommendationGroup> _randomRecommendationGroups = [];
@@ -243,6 +260,7 @@ class _DashboardHomePageState extends State<DashboardHomePage>
           forceRefreshRecommended: true,
           forceRefreshRandom: true,
           forceRefreshToday: true,
+          forceRefreshTrending: true,
         );
       }
 
@@ -967,6 +985,8 @@ class _DashboardHomePageState extends State<DashboardHomePage>
       _dandanplayScrollController = null;
       _randomRecommendationsScrollController?.dispose();
       _randomRecommendationsScrollController = null;
+      _trendingScrollController?.dispose();
+      _trendingScrollController = null;
 
       debugPrint('DashboardHomePage: ScrollController已销毁');
     } catch (e) {
@@ -989,7 +1009,7 @@ class _DashboardHomePageState extends State<DashboardHomePage>
     if (_isLargeScreenModeActive) {
       return NipaplayLargeScreenPageScaffold(
         title: '主页',
-        subtitle: '继续观看、今日新番和媒体库推荐',
+        subtitle: '继续观看、排行榜、新番和媒体库推荐',
         icon: Icons.home_rounded,
         actions: [
           NipaplayLargeScreenActionButton(

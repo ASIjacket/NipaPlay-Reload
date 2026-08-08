@@ -13,12 +13,13 @@ import 'package:kmbal_ionicons/kmbal_ionicons.dart';
 import 'package:nipaplay/settings/adaptive_settings_scope.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_adaptive_platform_ui.dart'
     show AdaptiveSlider, AdaptiveSwitch;
-import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_settings_group_card.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_settings_tile.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/fluent_settings_switch.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/settings_card.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/settings_item.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
@@ -38,7 +39,6 @@ class AdaptiveSettingsTile<T> extends material.StatelessWidget {
     this.dropdownItems,
     this.onDropdownChanged,
     this.dropdownKey,
-    this.useNativeIOS26Dropdown = false,
     this.switchValue,
     this.onSwitchChanged,
     this.hideNativeIOS26Switch = false,
@@ -67,7 +67,6 @@ class AdaptiveSettingsTile<T> extends material.StatelessWidget {
     required List<DropdownMenuItemData<T>> items,
     required FutureOr<void> Function(T value) onChanged,
     material.GlobalKey? dropdownKey,
-    bool useNativeIOS26Dropdown = false,
   }) {
     return AdaptiveSettingsTile<T>._(
       key: key,
@@ -80,7 +79,6 @@ class AdaptiveSettingsTile<T> extends material.StatelessWidget {
       dropdownItems: items,
       onDropdownChanged: onChanged,
       dropdownKey: dropdownKey,
-      useNativeIOS26Dropdown: useNativeIOS26Dropdown,
     );
   }
 
@@ -228,10 +226,6 @@ class AdaptiveSettingsTile<T> extends material.StatelessWidget {
   final FutureOr<void> Function(T value)? onDropdownChanged;
   final material.GlobalKey? dropdownKey;
 
-  /// Uses the native UIKit popup menu on iOS 26 and later.
-  ///
-  /// Other platforms and earlier iOS versions keep the shared bottom sheet.
-  final bool useNativeIOS26Dropdown;
   final bool? switchValue;
   final material.ValueChanged<bool>? onSwitchChanged;
 
@@ -406,9 +400,12 @@ class AdaptiveSettingsTile<T> extends material.StatelessWidget {
     }
     final label =
         selected?.title ?? (items.isNotEmpty ? items.first.title : '');
-    if (useNativeIOS26Dropdown && usesNativeIOS26SettingsControls) {
-      return AdaptivePopupMenuButton.text<T>(
-        label: label,
+    final trigger = _PhoneMenuChip(label: label);
+    if (items.isEmpty) {
+      return trigger;
+    }
+    if (usesNativeIOS26SettingsControls) {
+      return AdaptivePopupMenuButton.widget<T>(
         items: <AdaptivePopupMenuEntry>[
           for (final item in items)
             AdaptivePopupMenuItem<T>(
@@ -424,35 +421,16 @@ class AdaptiveSettingsTile<T> extends material.StatelessWidget {
           }
           onDropdownChanged?.call(items[index].value);
         },
-        shrinkWrap: true,
         buttonStyle: PopupButtonStyle.plain,
+        child: trigger,
       );
     }
-    return cupertino.CupertinoButton(
-      padding: material.EdgeInsets.zero,
-      minimumSize: material.Size.zero,
-      onPressed: items.isEmpty
-          ? null
-          : () async {
-              final selectedIndex =
-                  await CupertinoBottomSheet.showSelection<int>(
-                context: context,
-                title: title,
-                options: [
-                  for (final entry in items.asMap().entries)
-                    CupertinoBottomSheetOption(
-                      label: entry.value.title,
-                      value: entry.key,
-                      selected: entry.value.isSelected,
-                      enabled: entry.value.enabled,
-                    ),
-                ],
-              );
-              if (selectedIndex != null) {
-                onDropdownChanged?.call(items[selectedIndex].value);
-              }
-            },
-      child: _PhoneMenuChip(label: label),
+    return BlurDropdown<T>(
+      dropdownKey: dropdownKey ?? material.GlobalKey(),
+      items: items,
+      onItemSelected: (value) => onDropdownChanged?.call(value),
+      controlBuilder: (context, selectedLabel) =>
+          _PhoneMenuChip(label: selectedLabel),
     );
   }
 
@@ -686,6 +664,7 @@ class AdaptiveSettingsSwitch extends material.StatelessWidget {
       );
     }
 
+    // 桌面模式走 FluentSettingsSwitch，其内部已集成大屏幕开关音效。
     return FluentSettingsSwitch(
       value: value,
       onChanged: onChanged,
@@ -847,6 +826,54 @@ class _ColorSwatch<T> extends material.StatelessWidget {
             .onSurface
             .withValues(alpha: 0.22);
     final color = enabled ? option.color : option.color.withValues(alpha: 0.42);
+    final swatch = material.AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
+      curve: material.Curves.easeOutCubic,
+      width: 30,
+      height: 30,
+      decoration: material.BoxDecoration(
+        color: color,
+        shape: material.BoxShape.circle,
+        border: material.Border.all(
+          color: borderColor,
+          width: selected ? 3 : 1,
+        ),
+        boxShadow: [
+          if (selected)
+            material.BoxShadow(
+              color: AppAccentColors.current.withValues(alpha: 0.22),
+              blurRadius: 8,
+              spreadRadius: 1,
+            ),
+        ],
+      ),
+      child: selected
+          ? material.Icon(
+              material.Icons.check_rounded,
+              size: 16,
+              color: checkColor,
+            )
+          : null,
+    );
+    final onActivate = enabled ? () => onChanged(option.value) : null;
+    final control = NipaplayLargeScreenModeScope.isActiveOf(context)
+        ? NipaplayLargeScreenFocusableAction(
+            onActivate: onActivate,
+            borderRadius: material.BorderRadius.circular(18),
+            padding: material.EdgeInsets.zero,
+            focusScale: 1.10,
+            style: NipaplayLargeScreenFocusableStyle(
+              focusStrokeColor: AppAccentColors.current,
+              idleBackgroundDark: material.Colors.transparent,
+              idleBackgroundLight: material.Colors.transparent,
+            ),
+            child: swatch,
+          )
+        : material.GestureDetector(
+            behavior: material.HitTestBehavior.opaque,
+            onTap: onActivate,
+            child: swatch,
+          );
 
     return material.Tooltip(
       message: option.title,
@@ -854,39 +881,7 @@ class _ColorSwatch<T> extends material.StatelessWidget {
         button: true,
         selected: selected,
         label: option.title,
-        child: material.GestureDetector(
-          behavior: material.HitTestBehavior.opaque,
-          onTap: enabled ? () => onChanged(option.value) : null,
-          child: material.AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            curve: material.Curves.easeOutCubic,
-            width: 30,
-            height: 30,
-            decoration: material.BoxDecoration(
-              color: color,
-              shape: material.BoxShape.circle,
-              border: material.Border.all(
-                color: borderColor,
-                width: selected ? 3 : 1,
-              ),
-              boxShadow: [
-                if (selected)
-                  material.BoxShadow(
-                    color: AppAccentColors.current.withValues(alpha: 0.22),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  ),
-              ],
-            ),
-            child: selected
-                ? material.Icon(
-                    material.Icons.check_rounded,
-                    size: 16,
-                    color: checkColor,
-                  )
-                : null,
-          ),
-        ),
+        child: control,
       ),
     );
   }

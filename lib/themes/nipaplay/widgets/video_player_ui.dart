@@ -17,6 +17,8 @@ import 'package:nipaplay/widgets/macos_native_video_view.dart';
 import 'package:nipaplay/widgets/desktop_transient_overlay.dart';
 import 'package:nipaplay/widgets/desktop_picture_in_picture_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/themed_anime_detail.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_player_menu_scope.dart';
 import 'package:provider/provider.dart';
 import 'brightness_gesture_area.dart';
 import 'volume_gesture_area.dart';
@@ -35,6 +37,34 @@ import 'base_settings_menu.dart';
 import 'playback_info_menu.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
+
+/// HarmonyOS may mirror a touch as pointer activity before delivering its tap.
+/// Keep the existing pointer-driven controls behavior on every other platform.
+@visibleForTesting
+bool shouldHandleDesktopPointerActivity({
+  required bool isHarmonyOS,
+}) {
+  return !isHarmonyOS;
+}
+
+@visibleForTesting
+bool shouldDelegateLargeScreenPlayerKeyToControls({
+  required bool isLargeScreen,
+  required bool controlsVisible,
+  required LogicalKeyboardKey key,
+}) {
+  if (!isLargeScreen || !controlsVisible) {
+    return false;
+  }
+  return key == LogicalKeyboardKey.arrowLeft ||
+      key == LogicalKeyboardKey.arrowRight ||
+      key == LogicalKeyboardKey.arrowUp ||
+      key == LogicalKeyboardKey.arrowDown ||
+      key == LogicalKeyboardKey.enter ||
+      key == LogicalKeyboardKey.numpadEnter ||
+      key == LogicalKeyboardKey.select ||
+      key == LogicalKeyboardKey.gameButtonA;
+}
 
 class VideoPlayerUI extends StatefulWidget {
   final Widget? emptyPlaceholder;
@@ -171,12 +201,38 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
       return KeyEventResult.ignored;
     }
 
+    final isLargeScreen = NipaplayLargeScreenModeScope.isActiveOf(context);
+    if (shouldDelegateLargeScreenPlayerKeyToControls(
+      isLargeScreen: isLargeScreen,
+      controlsVisible: videoState.showControls,
+      key: key,
+    )) {
+      return KeyEventResult.ignored;
+    }
+
     switch (key) {
       case LogicalKeyboardKey.space:
+      case LogicalKeyboardKey.mediaPlayPause:
         videoState.togglePlayPause();
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.mediaPlay:
+        if (videoState.status != PlayerStatus.playing) {
+          videoState.togglePlayPause();
+        }
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.mediaPause:
+        if (videoState.status == PlayerStatus.playing) {
+          videoState.togglePlayPause();
+        }
         return KeyEventResult.handled;
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
+      case LogicalKeyboardKey.select:
+      case LogicalKeyboardKey.gameButtonA:
+        if (isLargeScreen) {
+          videoState.togglePlayPause();
+          return KeyEventResult.handled;
+        }
         unawaited(videoState.toggleFullscreen());
         return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowLeft:
@@ -209,6 +265,14 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
         unawaited(videoState.showSendDanmakuDialog());
         return KeyEventResult.handled;
       case LogicalKeyboardKey.escape:
+        if (isLargeScreen) {
+          if (!NipaplayLargeScreenPlayerMenuScope.maybeHandleMenuPress(
+            context,
+          )) {
+            videoState.revealLargeScreenControls();
+          }
+          return KeyEventResult.handled;
+        }
         if (videoState.isFullscreen) {
           unawaited(videoState.toggleFullscreen());
           return KeyEventResult.handled;
@@ -584,7 +648,10 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
   }
 
   bool _handlePointerActivity() {
-    if (!mounted) {
+    if (!mounted ||
+        !shouldHandleDesktopPointerActivity(
+          isHarmonyOS: globals.isHarmonyOS,
+        )) {
       return false;
     }
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);

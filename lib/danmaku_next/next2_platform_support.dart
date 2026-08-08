@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
 
 class Next2PlatformSupport {
   const Next2PlatformSupport._();
@@ -7,7 +8,7 @@ class Next2PlatformSupport {
   /// Web is intentionally excluded because the current Rust runtime is not
   /// packaged as a wasm module for the Flutter web target.
   static bool get isKernelSupported {
-    if (kIsWeb) return false;
+    if (kIsWeb || globals.isTelevision) return false;
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
       case TargetPlatform.iOS:
@@ -17,12 +18,16 @@ class Next2PlatformSupport {
         return true;
       case TargetPlatform.fuchsia:
         return false;
+      default:
+        // HarmonyOS packages the Rust layout APIs, but Next2/DFM+ currently
+        // require the native texture renderer as well.
+        return false;
     }
   }
 
   /// Native texture rendering is required on every non-web platform.
   static bool get isNativeTextureSupported {
-    if (kIsWeb) return false;
+    if (kIsWeb || globals.isTelevision) return false;
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
       case TargetPlatform.iOS:
@@ -31,6 +36,10 @@ class Next2PlatformSupport {
       case TargetPlatform.linux:
         return true;
       case TargetPlatform.fuchsia:
+        return false;
+      default:
+        // HarmonyOS still needs a TextureRegistry + native surface bridge for
+        // the Rust/wgpu renderer.
         return false;
     }
   }

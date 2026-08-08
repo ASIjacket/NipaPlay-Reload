@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:nipaplay/services/large_screen_ui_sfx_service.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:provider/provider.dart';
 
 class NipaplayLargeScreenFocusableStyle {
   const NipaplayLargeScreenFocusableStyle({
@@ -27,16 +29,18 @@ class NipaplayLargeScreenFocusableAction extends StatefulWidget {
     this.onActivate,
     this.focusNode,
     this.autofocus = false,
+    this.isSelected,
     this.borderRadius = BorderRadius.zero,
     this.padding,
     this.style = const NipaplayLargeScreenFocusableStyle(),
     this.focusScale = 1.0,
-  });
+  }) : assert(isSelected == null || onActivate != null);
 
   final Widget child;
   final VoidCallback? onActivate;
   final FocusNode? focusNode;
   final bool autofocus;
+  final bool? isSelected;
   final BorderRadius borderRadius;
   final EdgeInsetsGeometry? padding;
   final NipaplayLargeScreenFocusableStyle style;
@@ -58,10 +62,13 @@ class _NipaplayLargeScreenFocusableActionState
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final style = widget.style;
+    final isSelected = widget.isSelected == true;
     final Color idleOverlay =
         isDarkMode ? style.idleBackgroundDark : style.idleBackgroundLight;
-    final bool isActive = _isFocused || _isHovered;
-    final Color backgroundColor = idleOverlay;
+    final bool isActive = _isFocused || _isHovered || isSelected;
+    final Color backgroundColor = isSelected
+        ? AppAccentColors.current.withValues(alpha: isDarkMode ? 0.16 : 0.1)
+        : idleOverlay;
     final Color contentColor =
         isDarkMode ? style.contentColorDark : style.contentColorLight;
 
@@ -98,15 +105,27 @@ class _NipaplayLargeScreenFocusableActionState
       ),
     );
 
-    return FocusableActionDetector(
+    final focusableAction = FocusableActionDetector(
       focusNode: widget.focusNode,
-      autofocus: widget.autofocus,
+      autofocus: widget.autofocus || isSelected,
       enabled: widget.onActivate != null,
+      onFocusChange: (value) {
+        if (value && widget.isSelected == true) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              Scrollable.ensureVisible(context, alignment: 0.5);
+            }
+          });
+        }
+      },
       onShowFocusHighlight: (value) {
         if (_isFocused == value) return;
         setState(() {
           _isFocused = value;
         });
+        if (value) {
+          context.read<LargeScreenUiSfxService>().playFocusChange();
+        }
       },
       onShowHoverHighlight: (value) {
         if (_isHovered == value) return;
@@ -132,6 +151,15 @@ class _NipaplayLargeScreenFocusableActionState
         onTap: widget.onActivate,
         child: buttonSurface,
       ),
+    );
+
+    if (widget.isSelected == null) {
+      return focusableAction;
+    }
+    return Semantics(
+      button: true,
+      selected: widget.isSelected,
+      child: focusableAction,
     );
   }
 }

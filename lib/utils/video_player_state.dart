@@ -42,6 +42,7 @@ import 'package:nipaplay/services/web_remote_history_sync_service.dart';
 import 'package:nipaplay/services/timeline_danmaku_service.dart'; // 导入时间轴弹幕服务
 import 'package:nipaplay/services/danmaku_spoiler_filter_service.dart';
 import 'package:nipaplay/services/player_remote_control_bridge.dart';
+import 'package:nipaplay/services/playback_service.dart';
 import 'media_info_helper.dart';
 import 'package:nipaplay/services/danmaku_cache_manager.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
@@ -339,6 +340,8 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   bool _isControlsHovered = false;
   bool _controlsVisibilityLocked = false;
   bool _isSeeking = false;
+  int _mdkNearEndLastPositionMs = -1;
+  int _mdkNearEndStalledSinceMs = 0;
   final FocusNode _focusNode = FocusNode();
   final GlobalKey screenshotBoundaryKey = GlobalKey(
     debugLabel: 'player_screenshot_boundary',
@@ -490,7 +493,9 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   DanmakuShadowStyle _danmakuShadowStyle = globals.isMobilePlatform
       ? DanmakuShadowStyle.none
       : DanmakuShadowStyle.strong;
-  double _next2DanmakuOutlineWidth = defaultDanmakuOutlineWidthLevel;
+  double _next2DanmakuOutlineWidth = globals.isTelevision
+      ? defaultTvOSErikaDanmakuOutlineWidthLevel
+      : defaultDanmakuOutlineWidthLevel;
   static const double minSubtitleScale = 0.5;
   static const double maxSubtitleScale = 2.5;
   static const double defaultSubtitleScale = 1.0;
@@ -1456,6 +1461,14 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   @override
   void dispose() {
     _isDisposed = true;
+
+    // 关闭播放器时立即取消自动续播倒计时，避免倒计时在后台继续运行。
+    try {
+      AutoNextEpisodeService.instance.cancelAutoNext();
+    } catch (e) {
+      debugPrint('[VideoPlayerState] dispose时取消自动续播失败: $e');
+    }
+
     PlayerRemoteControlBridge.instance.detach(this);
     _detachPluginDanmakuFilter();
 
@@ -1563,7 +1576,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
     }
     WakelockPlus.disable();
     //debugPrint("Wakelock disabled on dispose.");
-    if (!kIsWeb) {
+    if (globals.isDesktop) {
       windowManager.removeListener(this);
     }
     _playerKernelChangeSubscription?.cancel(); // 取消播放器内核切换事件订阅

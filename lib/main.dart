@@ -11,6 +11,7 @@ import 'package:nipaplay/l10n/app_locale_utils.dart';
 import 'package:nipaplay/l10n/app_localizations.dart';
 import 'package:nipaplay/app/app_navigation_scope.dart';
 import 'package:nipaplay/app/app_display_surface.dart';
+import 'package:nipaplay/app/app_display_surface_scope.dart';
 import 'package:nipaplay/app/app_page_ids.dart';
 import 'package:nipaplay/app/unified_app_view_presenter.dart';
 import 'package:nipaplay/app/unified_app_pages.dart';
@@ -23,6 +24,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_actions.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_preferences.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/system_resource_display.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tvos_remote_text_input_scope.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:provider/provider.dart';
 import 'themes/nipaplay/pages/settings/settings_entries.dart';
@@ -53,6 +55,7 @@ import 'package:nipaplay/providers/emby_transcode_provider.dart';
 import 'package:nipaplay/providers/labs_settings_provider.dart';
 import 'package:nipaplay/plugins/plugin_service.dart';
 import 'package:nipaplay/themes/theme_descriptor.dart';
+import 'package:universal_gamepad/universal_gamepad.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'services/file_picker_service.dart';
@@ -89,6 +92,7 @@ import 'package:nipaplay/providers/app_language_provider.dart';
 import 'package:nipaplay/models/watch_history_database.dart';
 import 'package:nipaplay/services/http_client_initializer.dart';
 import 'package:nipaplay/services/smb_proxy_service.dart';
+import 'package:nipaplay/services/large_screen_ui_sfx_service.dart';
 import 'package:nipaplay/services/server_connectivity_service.dart';
 import 'package:nipaplay/providers/bottom_bar_provider.dart';
 import 'package:nipaplay/models/anime_detail_display_mode.dart';
@@ -160,7 +164,7 @@ Alignment _resolveStartupWindowAlignment(
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb) {
+  if (!kIsWeb && globals.supportsRustNativeBridge) {
     try {
       await ensureRustInitialized();
     } catch (error) {
@@ -294,18 +298,23 @@ void main(List<String> args) async {
     }
   }
 
-  // 初始化MediaKit - 添加错误处理防止重复初始化
-  try {
-    MediaKit.ensureInitialized();
-  } catch (e) {
-    debugPrint('MediaKit初始化警告: $e');
-    // 如果是重复初始化错误，可以安全忽略
-    if (!e.toString().contains('invalid reuse after initialization failure')) {
-      rethrow;
+  // Native runtime support is centralized so Android TV can continue using
+  // the Android plugin graph while tvOS keeps its dedicated dependencies.
+  if (globals.supportsMediaKitNativeRuntime) {
+    try {
+      MediaKit.ensureInitialized();
+    } catch (e) {
+      debugPrint('MediaKit初始化警告: $e');
+      // 如果是重复初始化错误，可以安全忽略
+      if (!e
+          .toString()
+          .contains('invalid reuse after initialization failure')) {
+        rethrow;
+      }
     }
-  }
-  if (MediaKitPlayerAdapter.shouldUseDefaultQuietMpvLogs()) {
-    MediaKitPlayerAdapter.setMpvLogLevelNone();
+    if (MediaKitPlayerAdapter.shouldUseDefaultQuietMpvLogs()) {
+      MediaKitPlayerAdapter.setMpvLogLevelNone();
+    }
   }
 
   // 添加全局异常捕获
@@ -426,7 +435,10 @@ void main(List<String> args) async {
 
     // 加载设置
     Future.wait(<Future<dynamic>>[
-      SettingsStorage.loadString('themeMode', defaultValue: 'system'),
+      SettingsStorage.loadString(
+        'themeMode',
+        defaultValue: globals.isTelevision ? 'dark' : 'system',
+      ),
       SettingsStorage.loadString(
         'backgroundImageMode',
         defaultValue: kIsWeb ? '关闭' : globals.backgroundImageMode,
@@ -451,7 +463,8 @@ void main(List<String> args) async {
       // 检查自定义背景路径有效性，发现无效则恢复为默认图片
       _validateCustomBackgroundPath();
 
-      final themeMode = (results[0] as String?) ?? 'system';
+      final themeMode =
+          (results[0] as String?) ?? (globals.isTelevision ? 'dark' : 'system');
       final animeDetailMode = (results[3] as String?) ?? 'simple';
       final backgroundImageRenderMode = (results[4] as String?) ??
           BackgroundImageRenderMode.opacity.storageKey;
@@ -498,7 +511,8 @@ void main(List<String> args) async {
 
     // 处理主题模式设置
     final settingsMap = results[2] as Map<String, dynamic>;
-    final savedThemeMode = settingsMap['themeMode'] as String? ?? 'system';
+    final savedThemeMode = settingsMap['themeMode'] as String? ??
+        (globals.isTelevision ? 'dark' : 'system');
     final savedDetailModeString =
         settingsMap['animeDetailMode'] as String? ?? 'simple';
     final savedBackgroundRenderModeString =
@@ -605,6 +619,9 @@ void main(List<String> args) async {
           ChangeNotifierProvider.value(value: ServiceProvider.embyProvider),
           ChangeNotifierProvider.value(
               value: ServiceProvider.dandanplayRemoteProvider),
+          ChangeNotifierProvider(
+            create: (_) => LargeScreenUiSfxService(),
+          ),
         ],
         child: DesktopMultiWindowHost(
           child: NipaPlayApp(launchFilePath: launchFilePath),
@@ -952,7 +969,7 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
               isWeb: kIsWeb,
               isIOS: !kIsWeb && Platform.isIOS,
               isTablet: globals.isTablet,
-              isTelevision: globals.isAndroidTv,
+              isTelevision: globals.isTelevision,
             );
             Widget overlayBuilder(Widget child) {
               return _buildGlobalAppOverlay(child, isDragging: _isDragging);
@@ -1078,10 +1095,14 @@ class MainPage extends StatefulWidget {
 class MainPageState extends State<MainPage>
     with TickerProviderStateMixin, WindowListener {
   bool isMaximized = false;
+  // 记录进入全屏（大屏幕模式）前窗口是否最大化，
+  // 以便退出全屏时恢复正确的最大化状态。
+  bool _wasMaximizedBeforeFullScreen = false;
   TabController? globalTabController;
   bool _showSplash = true;
   bool _isThemeRevealRunning = false;
   bool _useLargeScreenLayout = false;
+  StreamSubscription<GamepadEvent>? _guideButtonSubscription;
   StreamSubscription<String>? _androidFileAssociationSubscription;
   DownloaderSettingsProvider? _downloaderSettingsProvider;
   SettingsProvider? _settingsProvider;
@@ -1187,7 +1208,22 @@ class MainPageState extends State<MainPage>
     DesktopPlayerWindowService.instance.addListener(_manageHotkeys);
     ExternalPlayerConsoleService.sessionAvailability
         .addListener(_onExternalPlayerConsoleAvailabilityChanged);
+    _initGuideButtonListener();
     _initialize();
+  }
+
+  /// 监听手柄 Guide 按钮（Xbox 正中间上方按键），
+  /// 仅当当前不在大屏幕模式时按下进入大屏幕模式。
+  /// 进入大屏幕模式后由 NipaplayLargeScreenScaffoldLayout
+  /// 接管手柄输入，此处不再响应。
+  void _initGuideButtonListener() {
+    _guideButtonSubscription = Gamepad.instance.events.listen((event) {
+      if (!mounted) return;
+      if (event is! GamepadButtonEvent) return;
+      if (event.button != GamepadButton.guide || !event.pressed) return;
+      if (_useLargeScreenLayout) return;
+      _toggleLargeScreenLayout();
+    });
   }
 
   Future<void> _initialize() async {
@@ -1341,7 +1377,10 @@ class MainPageState extends State<MainPage>
   }
 
   Future<void> _initializeController() async {
-    _useLargeScreenLayout = await LargeScreenModePreferences.load();
+    _useLargeScreenLayout = await LargeScreenModePreferences.load(
+      defaultValue: globals.isTelevision,
+    );
+    _syncLargeScreenHotkeySuppression();
     final initialIndex = _getInitialTabIndex();
 
     if (mounted) {
@@ -1378,7 +1417,7 @@ class MainPageState extends State<MainPage>
         _initializeHotkeys();
       }
 
-      if (_useLargeScreenLayout && _isLabsLargeScreenModeEnabled()) {
+      if (_useLargeScreenLayout) {
         unawaited(_syncDesktopFullScreenWithLargeScreenMode(true));
       }
     });
@@ -1466,6 +1505,7 @@ class MainPageState extends State<MainPage>
 
   @override
   void dispose() {
+    HotkeyService().setLargeScreenModeActive(false);
     DesktopPlayerWindowService.instance.removeListener(_manageHotkeys);
     _tabChangeNotifier
         ?.removeListener(_onTabChangeRequested); // Temporarily remove
@@ -1477,6 +1517,7 @@ class MainPageState extends State<MainPage>
     );
     ExternalPlayerConsoleService.sessionAvailability
         .removeListener(_onExternalPlayerConsoleAvailabilityChanged);
+    _guideButtonSubscription?.cancel();
     _androidFileAssociationSubscription?.cancel();
     globalTabController?.removeListener(_onTabChange);
     _videoPlayerState?.removeListener(_manageHotkeys);
@@ -1526,15 +1567,18 @@ class MainPageState extends State<MainPage>
     await windowManager.close();
   }
 
+  void _syncLargeScreenHotkeySuppression() {
+    final isLargeScreenModeActive = globals.isTelevision ||
+        (globals.isDesktopOrTablet && _useLargeScreenLayout);
+    HotkeyService().setLargeScreenModeActive(isLargeScreenModeActive);
+  }
+
   Future<void> _toggleLargeScreenLayout() async {
-    final labsSettings = context.read<LabsSettingsProvider>();
-    if (!labsSettings.enableLargeScreenMode && !_useLargeScreenLayout) {
-      return;
-    }
     final nextValue = !_useLargeScreenLayout;
     setState(() {
       _useLargeScreenLayout = nextValue;
     });
+    _syncLargeScreenHotkeySuppression();
     try {
       await LargeScreenModePreferences.save(nextValue);
     } catch (e) {
@@ -1553,18 +1597,20 @@ class MainPageState extends State<MainPage>
     try {
       final isFullScreen = await windowManager.isFullScreen();
       if (isFullScreen != shouldUseFullScreen) {
+        if (shouldUseFullScreen) {
+          // 进入全屏前记录当前最大化状态
+          _wasMaximizedBeforeFullScreen = await windowManager.isMaximized();
+        }
         await windowManager.setFullScreen(shouldUseFullScreen);
+        if (!shouldUseFullScreen && _wasMaximizedBeforeFullScreen) {
+          // 退出全屏后等待 OS 完成窗口状态切换，再恢复最大化
+          await Future.delayed(const Duration(milliseconds: 150));
+          await windowManager.maximize();
+        }
       }
     } catch (e) {
       debugPrint('[MainPageState] 切换大屏幕模式全屏状态失败: $e');
     }
-  }
-
-  bool _isLabsLargeScreenModeEnabled() {
-    if (!mounted) {
-      return false;
-    }
-    return context.read<LabsSettingsProvider>().enableLargeScreenMode;
   }
 
   ThemeMode _nextThemeMode() {
@@ -1676,16 +1722,14 @@ class MainPageState extends State<MainPage>
 
   @override
   void onWindowEvent(String eventName) {
-    if (eventName == 'leave-full-screen' &&
-        _useLargeScreenLayout &&
-        _isLabsLargeScreenModeEnabled()) {
+    if (eventName == 'leave-full-screen' && _useLargeScreenLayout) {
       unawaited(_syncDesktopFullScreenWithLargeScreenMode(true));
     }
   }
 
   @override
   void onWindowLeaveFullScreen() {
-    if (_useLargeScreenLayout && _isLabsLargeScreenModeEnabled()) {
+    if (_useLargeScreenLayout) {
       unawaited(_syncDesktopFullScreenWithLargeScreenMode(true));
     }
   }
@@ -1700,13 +1744,16 @@ class MainPageState extends State<MainPage>
     final mediaPadding = MediaQuery.of(context).padding;
     final bool isMac = !kIsWeb && Platform.isMacOS;
     final bool isDesktop = globals.isDesktop;
-    final bool canUseLargeScreenLayout = globals.isDesktopOrTablet;
-    final bool labsEnableLargeScreenMode =
-        context.watch<LabsSettingsProvider>().enableLargeScreenMode;
-    final bool allowLargeScreenControls = labsEnableLargeScreenMode;
-    final bool isLargeScreenLayoutActive = canUseLargeScreenLayout &&
-        allowLargeScreenControls &&
-        _useLargeScreenLayout;
+    final bool isTelevisionSurface =
+        AppDisplaySurfaceScope.of(context) == AppDisplaySurface.television;
+    final bool canUseLargeScreenLayout =
+        globals.isDesktopOrTablet || isTelevisionSurface;
+    final bool allowLargeScreenControls = shouldOfferLargeScreenModeControl(
+      isDesktopOrTablet: globals.isDesktopOrTablet,
+      isTelevisionSurface: isTelevisionSurface,
+    );
+    final bool isLargeScreenLayoutActive = isTelevisionSurface ||
+        (canUseLargeScreenLayout && _useLargeScreenLayout);
     final double baseTopPadding = isMac ? 10 : 4;
     final double baseRightPadding = isMac ? 20 : 10;
     final double topPadding =
@@ -1719,7 +1766,9 @@ class MainPageState extends State<MainPage>
       onSelectPage: _selectPage,
       child: NipaplayLargeScreenModeScope(
         isActive: isLargeScreenLayoutActive,
-        child: Stack(
+        child: _LargeScreenModeSfxSync(
+          isActive: isLargeScreenLayoutActive,
+          child: Stack(
           children: [
             // 使用 Selector 只监听需要的状态
             Selector<VideoPlayerState, bool>(
@@ -1732,6 +1781,8 @@ class MainPageState extends State<MainPage>
                   shouldShowAppBar: shouldShowAppBar,
                   tabController: globalTabController,
                   useLargeScreenLayout: isLargeScreenLayoutActive,
+                  currentPageId: _selectedPageId,
+                  pageIds: _pageDefinitions.map((p) => p.id).toList(growable: false),
                   onToggleLargeScreen: allowLargeScreenControls
                       ? _toggleLargeScreenLayout
                       : null,
@@ -1807,6 +1858,7 @@ class MainPageState extends State<MainPage>
             ),
           ],
         ),
+        ),
       ),
     );
 
@@ -1818,13 +1870,54 @@ Widget _buildGlobalAppOverlay(
   Widget child, {
   required bool isDragging,
 }) {
+  final appChild =
+      globals.isTelevision ? TvOSRemoteTextInputScope(child: child) : child;
   return Stack(
     children: [
-      child,
+      appChild,
       const _SystemResourceOverlay(),
       if (isDragging) const DragDropOverlay(),
     ],
   );
+}
+
+/// 将大屏幕模式状态同步到 [LargeScreenUiSfxService]，
+/// 使其仅在大屏幕模式激活时播放 UI 音效。
+class _LargeScreenModeSfxSync extends StatefulWidget {
+  const _LargeScreenModeSfxSync({
+    required this.isActive,
+    required this.child,
+  });
+
+  final bool isActive;
+  final Widget child;
+
+  @override
+  State<_LargeScreenModeSfxSync> createState() => _LargeScreenModeSfxSyncState();
+}
+
+class _LargeScreenModeSfxSyncState extends State<_LargeScreenModeSfxSync> {
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LargeScreenModeSfxSync oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive != widget.isActive) {
+      _sync();
+    }
+  }
+
+  void _sync() {
+    context.read<LargeScreenUiSfxService>().largeScreenModeActive =
+        widget.isActive;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _SystemResourceOverlay extends StatelessWidget {

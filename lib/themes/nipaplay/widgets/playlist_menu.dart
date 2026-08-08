@@ -159,7 +159,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
               .toList();
 
           // 按文件名自然排序，避免 1、15、2 这类字典序播放顺序。
-          videoFiles.sort((a, b) => WebDAVFileSorter.naturalCompare(
+          videoFiles.sort((a, b) => WebDAVFileSorter.playlistCompare(
                 p.basename(a.path),
                 p.basename(b.path),
               ));
@@ -197,13 +197,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
   }
 
   bool _isSmbProxyStreamUrl(String path) {
-    final uri = Uri.tryParse(path);
-    if (uri == null) {
-      return false;
-    }
-    return uri.path == '/smb/stream' &&
-        (uri.queryParameters['conn']?.trim().isNotEmpty ?? false) &&
-        (uri.queryParameters['path']?.trim().isNotEmpty ?? false);
+    return MediaSourceUtils.parseSmbMediaPath(path) != null;
   }
 
   int _effectivePort(Uri uri) {
@@ -269,10 +263,40 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
       normalized = '/$normalized';
     }
     normalized = normalized.replaceAll(RegExp(r'/{2,}'), '/');
+    // URI-decode to handle server-side URL encoding of special characters
+    // (e.g. %5B → [, %20 → space, %E7... → 中). WebDAV servers may return
+    // encoded entry paths, and _currentFilePath from history may also be
+    // encoded. Decode so both sides are compared in raw format.
+    try {
+      normalized = Uri.decodeComponent(normalized);
+    } catch (_) {
+      // Keep as-is if decoding fails.
+    }
+    // Re-normalize in case decoded characters introduced slashes (%2F → /).
+    normalized = normalized.replaceAll('\\', '/');
+    normalized = normalized.replaceAll(RegExp(r'/{2,}'), '/');
     if (normalized.length > 1 && normalized.endsWith('/')) {
       normalized = normalized.substring(0, normalized.length - 1);
     }
     return normalized;
+  }
+
+  /// 解码 WebDAV 路径中每个路径段的 URI 编码字符。
+  /// 例如 "/%E7%A6%BB%E7%BA%BF%E7%BC%93%E5%AD%98/%5BDBD-Raws%5D%20..."
+  /// → "/离线缓存/[DBD-Raws] ..."
+  static String _decodeWebDavPath(String path) {
+    try {
+      return path.split('/').map((segment) {
+        if (segment.isEmpty) return segment;
+        try {
+          return Uri.decodeComponent(segment);
+        } catch (_) {
+          return segment;
+        }
+      }).join('/');
+    } catch (_) {
+      return path;
+    }
   }
 
   String _dirnameSmbPath(String smbPath) {
@@ -336,7 +360,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
           .toList();
 
       playableEntries
-          .sort((a, b) => WebDAVFileSorter.naturalCompare(a.name, b.name));
+          .sort((a, b) => WebDAVFileSorter.playlistCompare(a.name, b.name));
 
       _fileSystemEpisodes = playableEntries.map((entry) {
         final streamUrl =
@@ -406,7 +430,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
           if (aEpisodeId != bEpisodeId) {
             return aEpisodeId.compareTo(bEpisodeId);
           }
-          return WebDAVFileSorter.naturalCompare(a.title, b.title);
+          return WebDAVFileSorter.playlistCompare(a.title, b.title);
         });
 
       final animeName = (_currentAnimeTitle?.trim().isNotEmpty ?? false)
@@ -455,7 +479,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
   Future<void> _loadWebDavEpisodes(String currentPath) async {
     try {
       await WebDAVService.instance.initialize();
-      final resolved = WebDAVService.instance.resolveFileUrl(currentPath);
+      final resolved = WebDAVService.instance.resolveMediaPath(currentPath);
       if (resolved == null) {
         throw Exception('无法识别WebDAV连接');
       }
@@ -495,16 +519,20 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
               !entry.isDirectory &&
               WebDAVService.instance.isVideoFile(entry.name))
           .toList()
-        ..sort((a, b) => WebDAVFileSorter.naturalCompare(a.name, b.name));
+        ..sort((a, b) => WebDAVFileSorter.playlistCompare(a.name, b.name));
 
       _fileSystemEpisodes = videoEntries.map((entry) {
-        final fileUrl = WebDAVService.instance.getFileUrl(
-          resolved.connection,
-          entry.path,
+        // 解码 entry.path 中的 URI 编码字符（%E7...、%5B 等），
+        // 确保生成的路径与 history DB 中的路径格式一致，以便
+        // 播放列表正确高亮当前播放的剧集。
+        final decodedPath = _decodeWebDavPath(entry.path);
+        final filePath = MediaSourceUtils.buildWebDavPath(
+          resolved.connection.name,
+          decodedPath,
         );
-        _remoteDisplayNameCache[fileUrl] =
+        _remoteDisplayNameCache[filePath] =
             p.basenameWithoutExtension(entry.name);
-        return fileUrl;
+        return filePath;
       }).toList();
 
       _hasFileSystemData = _fileSystemEpisodes.isNotEmpty;
@@ -526,15 +554,12 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
 
   Future<void> _loadSmbEpisodes(String currentPath) async {
     try {
-      final uri = Uri.parse(currentPath);
-      final connName = uri.queryParameters['conn']?.trim();
-      final smbPath = uri.queryParameters['path']?.trim();
-      if (connName == null ||
-          connName.isEmpty ||
-          smbPath == null ||
-          smbPath.isEmpty) {
+      final parsed = MediaSourceUtils.parseSmbMediaPath(currentPath);
+      if (parsed == null) {
         throw Exception('SMB地址缺少必要参数');
       }
+      final connName = parsed.connectionName;
+      final smbPath = parsed.relativePath;
 
       await SMBService.instance.initialize();
       await SMBProxyService.instance.initialize();
@@ -552,13 +577,14 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
           .where((entry) =>
               !entry.isDirectory && SMBService.instance.isVideoFile(entry.name))
           .toList()
-        ..sort((a, b) => WebDAVFileSorter.naturalCompare(a.name, b.name));
+        ..sort((a, b) => WebDAVFileSorter.playlistCompare(a.name, b.name));
 
       _fileSystemEpisodes = videoEntries.map((entry) {
-        final url =
-            SMBProxyService.instance.buildStreamUrl(connection, entry.path);
-        _remoteDisplayNameCache[url] = p.basenameWithoutExtension(entry.name);
-        return url;
+        final filePath =
+            MediaSourceUtils.buildSmbPath(connection.name, entry.path);
+        _remoteDisplayNameCache[filePath] =
+            p.basenameWithoutExtension(entry.name);
+        return filePath;
       }).toList();
 
       _hasFileSystemData = _fileSystemEpisodes.isNotEmpty;
@@ -839,14 +865,23 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
           final uri = Uri.tryParse(filePath);
           final isHttpStream =
               uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+          final isStableRemotePath =
+              MediaSourceUtils.isNewWebDavPath(filePath) ||
+                  MediaSourceUtils.isNewSmbPath(filePath);
           final cachedHistory = _remoteHistoryCache[filePath];
 
-          if (isHttpStream) {
+          if (isHttpStream || isStableRemotePath) {
             // 共享/WebDAV/SMB 等网络流媒体
+            final pathSegments = uri?.pathSegments ?? const <String>[];
             final lastSegment =
-                uri.pathSegments.isNotEmpty ? uri.pathSegments.last : filePath;
+                pathSegments.isNotEmpty ? pathSegments.last : filePath;
             final fallbackTitle = _remoteDisplayNameCache[filePath] ??
                 p.basenameWithoutExtension(Uri.decodeComponent(lastSegment));
+            final actualPlayUrl =
+                MediaSourceUtils.resolveRemotePathToUrl(filePath);
+            if (actualPlayUrl == null || actualPlayUrl.isEmpty) {
+              throw Exception('无法解析远程媒体路径: $filePath');
+            }
             final playableItem = PlayableItem(
               videoPath: filePath,
               title: cachedHistory?.animeName ?? fallbackTitle,
@@ -854,7 +889,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
               animeId: cachedHistory?.animeId,
               episodeId: cachedHistory?.episodeId,
               historyItem: cachedHistory,
-              actualPlayUrl: filePath,
+              actualPlayUrl: actualPlayUrl,
               detailContext: videoState.playbackDetailContext,
             );
             if (!mounted) {
@@ -871,7 +906,7 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
             await videoState.initializePlayer(
               filePath,
               historyItem: cachedHistory,
-              actualPlayUrl: filePath,
+              actualPlayUrl: actualPlayUrl,
               playbackDetailContext: videoState.playbackDetailContext,
             );
             debugPrint('[播放列表] 远程流媒体播放完成');
@@ -990,19 +1025,23 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
   }
 
   bool _isSameSmbStream(String a, String b) {
-    if (!_isSmbProxyStreamUrl(a) || !_isSmbProxyStreamUrl(b)) {
+    final parsedA = MediaSourceUtils.parseSmbMediaPath(a);
+    final parsedB = MediaSourceUtils.parseSmbMediaPath(b);
+    if (parsedA == null || parsedB == null) {
       return false;
     }
-    final aUri = Uri.tryParse(a);
-    final bUri = Uri.tryParse(b);
-    if (aUri == null || bUri == null) {
-      return false;
-    }
-    final aConn = aUri.queryParameters['conn']?.trim();
-    final bConn = bUri.queryParameters['conn']?.trim();
-    final aPath = _normalizeSmbPath(aUri.queryParameters['path'] ?? '');
-    final bPath = _normalizeSmbPath(bUri.queryParameters['path'] ?? '');
-    return aConn == bConn && aPath == bPath;
+    return parsedA.connectionName == parsedB.connectionName &&
+        _normalizeSmbPath(parsedA.relativePath) ==
+            _normalizeSmbPath(parsedB.relativePath);
+  }
+
+  bool _isSameWebDavPath(String a, String b) {
+    final resolvedA = WebDAVService.instance.resolveMediaPath(a);
+    final resolvedB = WebDAVService.instance.resolveMediaPath(b);
+    if (resolvedA == null || resolvedB == null) return false;
+    return resolvedA.connection.name == resolvedB.connection.name &&
+        _normalizeSmbPath(resolvedA.relativePath) ==
+            _normalizeSmbPath(resolvedB.relativePath);
   }
 
   bool _isCurrentEpisode(String filePath) {
@@ -1014,6 +1053,9 @@ class _PlaylistMenuState extends State<PlaylistMenu> {
       return true;
     }
     if (_isSameSmbStream(filePath, currentPath)) {
+      return true;
+    }
+    if (_isSameWebDavPath(filePath, currentPath)) {
       return true;
     }
     if (_isSameSharedManagementStream(filePath, currentPath)) {

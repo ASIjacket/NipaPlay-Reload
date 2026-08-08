@@ -6,24 +6,33 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kmbal_ionicons/kmbal_ionicons.dart';
+import 'package:nipaplay/services/large_screen_ui_sfx_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/utils/theme_utils.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:provider/provider.dart';
 
 class _BlurDropdownGlobalState {
   static int expandedCount = 0;
 }
 
+typedef BlurDropdownControlBuilder = Widget Function(
+  BuildContext context,
+  String selectedLabel,
+);
+
 class BlurDropdown<T> extends StatefulWidget {
   final GlobalKey dropdownKey;
   final List<DropdownMenuItemData<T>> items;
   final FutureOr<void> Function(T value) onItemSelected;
+  final BlurDropdownControlBuilder? controlBuilder;
 
   const BlurDropdown({
     super.key,
     required this.dropdownKey,
     required this.items,
     required this.onItemSelected,
+    this.controlBuilder,
   });
 
   static bool get isAnyExpanded => _BlurDropdownGlobalState.expandedCount > 0;
@@ -196,67 +205,83 @@ class _BlurDropdownState<T> extends State<BlurDropdown<T>>
     final bgColor =
         isDark ? Colors.white.withValues(alpha: 0.12) : Colors.white;
 
-    final control = Container(
-      height: 40,
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: (_isDropdownOpen ||
-                  (isLargeScreenModeActive && _isControlFocused))
-              ? activeColor
-              : idleBorderColor,
-          width: (_isDropdownOpen ||
-                  (isLargeScreenModeActive && _isControlFocused))
-              ? 1.5
-              : 1,
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        key: widget.dropdownKey,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          GestureDetector(
-            onTap: () {
-              if (_isSelecting || _animationController.isAnimating) {
-                return;
-              }
-              if (_isDropdownOpen) {
-                _closeDropdown(restoreControlFocus: true);
-              } else {
-                _openDropdown(
-                  requestMenuFocus: isLargeScreenModeActive,
-                );
-              }
-            },
+    void toggleDropdown() {
+      if (_isSelecting || _animationController.isAnimating) {
+        return;
+      }
+      if (_isDropdownOpen) {
+        _closeDropdown(restoreControlFocus: true);
+      } else {
+        _openDropdown(requestMenuFocus: isLargeScreenModeActive);
+      }
+    }
+
+    final customControl = widget.controlBuilder?.call(
+      context,
+      _getSelectedItemText(),
+    );
+    final control = customControl != null
+        ? GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: toggleDropdown,
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _getSelectedItemText(),
-                    style: getTitleTextStyle(context),
-                  ),
-                  const SizedBox(width: 10),
-                  RotationTransition(
-                    turns: Tween(begin: 0.0, end: 0.5)
-                        .animate(_animationController),
-                    child: Icon(
-                      Ionicons.chevron_down_outline,
-                      color: _isDropdownOpen
-                          ? activeColor
-                          : (isDark ? Colors.white : Colors.black87),
-                    ),
-                  ),
-                ],
+              child: KeyedSubtree(
+                key: widget.dropdownKey,
+                child: customControl,
               ),
             ),
-          ),
-        ],
-      ),
-    );
+          )
+        : Container(
+            height: 40,
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: (_isDropdownOpen ||
+                        (isLargeScreenModeActive && _isControlFocused))
+                    ? activeColor
+                    : idleBorderColor,
+                width: (_isDropdownOpen ||
+                        (isLargeScreenModeActive && _isControlFocused))
+                    ? 1.5
+                    : 1,
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              key: widget.dropdownKey,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  onTap: toggleDropdown,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _getSelectedItemText(),
+                          style: getTitleTextStyle(context),
+                        ),
+                        const SizedBox(width: 10),
+                        RotationTransition(
+                          turns: Tween(begin: 0.0, end: 0.5)
+                              .animate(_animationController),
+                          child: Icon(
+                            Ionicons.chevron_down_outline,
+                            color: _isDropdownOpen
+                                ? activeColor
+                                : (isDark ? Colors.white : Colors.black87),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
 
     if (!isLargeScreenModeActive) {
       return control;
@@ -287,6 +312,9 @@ class _BlurDropdownState<T> extends State<BlurDropdown<T>>
           setState(() {
             _isControlFocused = focused;
           });
+          if (focused && NipaplayLargeScreenModeScope.isActiveOf(context)) {
+            context.read<LargeScreenUiSfxService>().playFocusChange();
+          }
         },
         onKeyEvent: _handleControlKeyEvent,
         descendantsAreFocusable: false,
@@ -436,6 +464,9 @@ class _BlurDropdownState<T> extends State<BlurDropdown<T>>
   void _openDropdown({bool requestMenuFocus = false}) {
     if (_isDropdownOpen || _animationController.isAnimating) {
       return;
+    }
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      context.read<LargeScreenUiSfxService>().playOpenSubPage();
     }
     _removeOverlay();
 
@@ -632,6 +663,9 @@ class _BlurDropdownState<T> extends State<BlurDropdown<T>>
     if (!_isDropdownOpen ||
         (_animationController.status == AnimationStatus.reverse)) {
       return;
+    }
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      context.read<LargeScreenUiSfxService>().playCloseSubPage();
     }
     _animationController.reverse().then((_) {
       _removeOverlay();
