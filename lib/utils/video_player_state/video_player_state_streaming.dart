@@ -631,8 +631,10 @@ extension EmbyQualitySwitch on VideoPlayerState {
     bool burnInSubtitle = false,
     int? audioStreamIndex,
     String? mediaSourceId,
+    EmbyResolvedTrackBundle? embyTrackSelection,
   }) async {
     final previousSession = _currentPlaybackSession;
+    final previousTrackSelection = _currentEmbyTrackSelection;
     if (_currentVideoPath == null ||
         !_currentVideoPath!.startsWith('emby://')) {
       return;
@@ -645,6 +647,7 @@ extension EmbyQualitySwitch on VideoPlayerState {
     final currentVolume = player.volume;
     final currentPlaybackRate = _playbackRate;
     final wasPlaying = _status == PlayerStatus.playing;
+    final currentDetailContext = _playbackDetailContext;
 
     final historyItem = WatchHistoryItem(
       filePath: currentPath,
@@ -658,10 +661,34 @@ extension EmbyQualitySwitch on VideoPlayerState {
       lastWatchTime: DateTime.now(),
     );
 
+    Future<void> restorePlaybackState() async {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      if (_useSystemVolume) {
+        _ensurePlayerVolumeMatchesPlatformPolicy();
+      } else {
+        player.volume = currentVolume;
+      }
+      if (currentPlaybackRate != 1.0) {
+        player.setPlaybackRate(currentPlaybackRate);
+      }
+      seekTo(currentPosition);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (wasPlaying) {
+        play();
+      } else {
+        pause();
+      }
+    }
+
     try {
       final embyPath = currentPath.replaceFirst('emby://', '');
       final parts = embyPath.split('/');
       final itemId = parts.isNotEmpty ? parts.last : embyPath;
+      final sourceChanged = mediaSourceId != null &&
+          mediaSourceId != previousSession?.mediaSourceId;
+      final nextTrackSelection = sourceChanged
+          ? embyTrackSelection
+          : embyTrackSelection ?? previousTrackSelection;
       final newSession = await EmbyService.instance.createPlaybackSession(
         itemId: itemId,
         quality: quality,
@@ -672,20 +699,44 @@ extension EmbyQualitySwitch on VideoPlayerState {
         playSessionId: _currentPlaybackSession?.playSessionId,
         mediaSourceId: mediaSourceId ?? _currentPlaybackSession?.mediaSourceId,
       );
-      await initializePlayer(
-        currentPath,
-        historyItem: historyItem,
-        playbackSession: newSession,
-        playbackDetailContext: _playbackDetailContext,
-        resetManualDanmakuOffset: false,
+      const defaultTrackSelection = EmbyResolvedTrackBundle(
+        audio: EmbyResolvedTrackSelection.followDefault(),
+        subtitle: EmbyResolvedTrackSelection.followDefault(),
       );
-      if (_error != null || !hasVideo) {
-        throw StateError(_error ?? 'Emby 播放器初始化失败');
-      }
-      _currentPlaybackSession = newSession;
-      EmbyPlaybackSyncService().updatePlaybackSession(newSession);
+      final coordinator = EmbyPlaybackStateCoordinator(
+        currentPlayback: previousSession == null
+            ? null
+            : EmbyResolvedPlayback(
+                session: previousSession,
+                reason: EmbySelectionReason.embyDefault,
+                didFallback: false,
+                tracks: previousTrackSelection ?? defaultTrackSelection,
+              ),
+        restorePlaybackState: restorePlaybackState,
+        initializePlayer: (session, tracks) async {
+          await initializePlayer(
+            currentPath,
+            historyItem: historyItem,
+            playbackSession: session,
+            embyTrackSelection: tracks,
+            playbackDetailContext: currentDetailContext,
+            resetManualDanmakuOffset: false,
+          );
+          ensureEmbyPlayerOpened(_error, hasVideo);
+          EmbyPlaybackSyncService().updatePlaybackSession(session);
+        },
+      );
+      await coordinator.reload(
+        EmbyResolvedPlayback(
+          session: newSession,
+          reason: EmbySelectionReason.embyDefault,
+          didFallback: false,
+          tracks: nextTrackSelection ?? defaultTrackSelection,
+        ),
+      );
     } catch (e) {
       _currentPlaybackSession = previousSession;
+      _currentEmbyTrackSelection = previousTrackSelection;
       if (previousSession != null) {
         EmbyPlaybackSyncService().updatePlaybackSession(previousSession);
       }
@@ -694,22 +745,7 @@ extension EmbyQualitySwitch on VideoPlayerState {
     }
 
     try {
-      await Future.delayed(const Duration(milliseconds: 150));
-      if (_useSystemVolume) {
-        _ensurePlayerVolumeMatchesPlatformPolicy();
-      } else {
-        player.volume = currentVolume;
-      }
-      if (currentPlaybackRate != 1.0) {
-        player.setPlaybackRate(currentPlaybackRate);
-      }
-      seekTo(currentPosition);
-      await Future.delayed(const Duration(milliseconds: 100));
-      if (wasPlaying) {
-        play();
-      } else {
-        pause();
-      }
+      await restorePlaybackState();
     } catch (e) {
       debugPrint('Emby 切源后恢复播放状态失败: $e');
     }

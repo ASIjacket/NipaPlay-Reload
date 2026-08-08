@@ -7,6 +7,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     String? historyFilePath,
     String? actualPlayUrl,
     PlaybackSession? playbackSession,
+    EmbyResolvedTrackBundle? embyTrackSelection,
     PlaybackDetailContext? playbackDetailContext,
     bool resetManualDanmakuOffset = true,
   }) async {
@@ -51,6 +52,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     }
 
     _clearPreviousVideoState(); // 清理旧状态
+    _currentEmbyTrackSelection = embyTrackSelection;
     final initializationGeneration = _playbackGeneration;
     _playbackDetailContext = resolvedDetailContext;
     _statusMessages.clear(); // <--- 新增行：确保消息列表在开始时是空的

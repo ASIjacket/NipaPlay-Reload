@@ -1756,46 +1756,45 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
           : null;
 
       if (playableHistoryItem.filePath.startsWith('emby://')) {
-        final embyPath =
-            playableHistoryItem.filePath.replaceFirst('emby://', '');
-        final parts = embyPath.split('/');
-        final embyId = parts.isNotEmpty ? parts.last : embyPath;
-        final initialSession = await EmbyService.instance.createPlaybackSession(
-          itemId: embyId,
-          startPositionMs: startPositionMs,
+        final embyId = embyItemIdFromVideoPath(playableHistoryItem.filePath);
+        final selectionContext = _embySelectionContextFor(episode);
+        final sources = await _embyMediaSourceCatalog.load(
+          selectionContext?.accountKey ?? _embyPageCacheScope,
+          embyId,
         );
+        final preferenceStore = await _embyPreferenceStore;
         if (!mounted) return;
 
-        await selectAndPlayEmbySource(
-          initialSession: initialSession,
-          chooseSource: _chooseEmbyMediaSource,
-          reloadSession: (mediaSourceId) =>
+        await startEmbyEpisodePlayback(
+          itemId: embyId,
+          context: selectionContext,
+          sources: sources,
+          loadPreferences: preferenceStore.load,
+          resolver: DefaultEmbyMediaSelectionResolver(),
+          startPositionMs: startPositionMs,
+          createSession: (request) =>
               EmbyService.instance.createPlaybackSession(
-            itemId: embyId,
-            startPositionMs: startPositionMs,
-            playSessionId: initialSession.playSessionId,
-            mediaSourceId: mediaSourceId,
+            itemId: request.itemId,
+            startPositionMs: request.startPositionMs,
+            audioStreamIndex: request.audioStreamIndex,
+            subtitleStreamIndex: request.subtitleStreamIndex,
+            burnInSubtitle: request.burnInSubtitle,
+            playSessionId: request.playSessionId,
+            mediaSourceId: request.mediaSourceId,
           ),
-          onSourceChanged: (previousId, selectedId) async {
-            if (!mounted) return;
-            final videoState =
-                Provider.of<VideoPlayerState>(context, listen: false);
-            await clearEmbySelectionsForSourceChange(
-              itemId: embyId,
-              clearAudio: (itemId) =>
-                  videoState.setEmbyServerAudioSelection(itemId, null),
-              clearSubtitle: (itemId) =>
-                  videoState.setEmbyServerSubtitleSelection(
-                itemId,
-                null,
-                burnIn: false,
-              ),
+          startPlayback: (playback) async {
+            await _startEpisodePlayback(
+              playableHistoryItem,
+              playback.session,
+              embyTrackSelection: playback.tracks,
+              onPlaybackStarted: playback.didFallback
+                  ? () => BlurSnackBar.show(
+                        context,
+                        '首选 Emby 版本不可用，已自动切换到可播放版本',
+                      )
+                  : null,
             );
           },
-          startPlayback: (session) => _startSelectedEmbyEpisode(
-            playableHistoryItem,
-            session,
-          ),
         );
         return;
       }
@@ -1816,35 +1815,12 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     }
   }
 
-  Future<PlaybackMediaSource?> _chooseEmbyMediaSource(
-    List<PlaybackMediaSource> sources,
-    String? selectedSourceId,
-  ) {
-    return BlurDialog.show<PlaybackMediaSource>(
-      context: context,
-      title: '选择媒体源',
-      contentWidget: Builder(
-        builder: (dialogContext) => EmbyMediaSourceSelector(
-          sources: sources,
-          selectedSourceId: selectedSourceId,
-          onSelected: (source) => Navigator.of(dialogContext).pop(source),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _startSelectedEmbyEpisode(
-    WatchHistoryItem historyItem,
-    PlaybackSession playbackSession,
-  ) async {
-    if (!mounted) return;
-    await _startEpisodePlayback(historyItem, playbackSession);
-  }
-
   Future<void> _startEpisodePlayback(
     WatchHistoryItem historyItem,
-    PlaybackSession? playbackSession,
-  ) async {
+    PlaybackSession? playbackSession, {
+    EmbyResolvedTrackBundle? embyTrackSelection,
+    VoidCallback? onPlaybackStarted,
+  }) async {
     if (!mounted) return;
     final settingsProvider =
         Provider.of<SettingsProvider>(context, listen: false);
@@ -1862,6 +1838,7 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
           await ExternalPlayerService.tryHandlePlayback(context, playableItem);
       if (!mounted) return;
       if (handled) {
+        onPlaybackStarted?.call();
         Navigator.of(context).pop();
         return;
       }
@@ -1879,19 +1856,38 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     }
     tabChangeNotifier?.changePage(AppPageIds.video);
 
-    Navigator.of(context).pop();
-    Future.delayed(const Duration(milliseconds: 100), () async {
-      try {
-        await videoPlayerState.initializePlayer(
-          historyItem.filePath,
-          historyItem: historyItem,
-          playbackSession: playbackSession,
-        );
-        videoPlayerState.play();
-      } catch (playError) {
-        debugPrint('异步播放流媒体时出错: $playError');
-      }
-    });
+    final isEmbyPlayback = historyItem.filePath.startsWith('emby://');
+    if (!isEmbyPlayback) {
+      Navigator.of(context).pop();
+      Future<void>.delayed(const Duration(milliseconds: 100), () async {
+        try {
+          await videoPlayerState.initializePlayer(
+            historyItem.filePath,
+            historyItem: historyItem,
+            playbackSession: playbackSession,
+          );
+          videoPlayerState.play();
+        } catch (playError) {
+          debugPrint('异步播放流媒体时出错: $playError');
+        }
+      });
+      return;
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await initializeEmbyPlayerAttempt(
+      initialize: () => videoPlayerState.initializePlayer(
+        historyItem.filePath,
+        historyItem: historyItem,
+        playbackSession: playbackSession,
+        embyTrackSelection: embyTrackSelection,
+      ),
+      readError: () => videoPlayerState.error,
+      hasVideo: () => videoPlayerState.hasVideo,
+      play: () async => videoPlayerState.play(),
+    );
+    onPlaybackStarted?.call();
+    if (mounted) Navigator.of(context).pop();
   }
 
   Widget _buildEpisodesListForSelectedSeason() {
