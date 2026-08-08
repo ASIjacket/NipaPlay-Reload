@@ -33,6 +33,9 @@ import 'package:nipaplay/services/auto_sync_service.dart'; // 导入自动云同
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/emby_media_source_selection.dart';
+import 'package:nipaplay/services/emby_media_preference_store.dart';
+import 'package:nipaplay/services/emby_media_selection_resolver.dart';
+import 'package:nipaplay/services/emby_player_menu_selection.dart';
 import 'package:nipaplay/services/emby_track_application.dart';
 import 'package:nipaplay/services/subtitle_service.dart';
 import 'package:nipaplay/services/webdav_service.dart';
@@ -295,6 +298,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   String? _currentActualPlayUrl; // 存储实际播放URL，用于判断转码状态
   PlaybackSession? _currentPlaybackSession;
   EmbyResolvedTrackBundle? _currentEmbyTrackSelection;
+  String? _currentEmbyAccountKey;
   int _lastPlaybackStartMs = 0; // 播放开始时间（用于流媒体缓冲期容错）
   static const int _streamingInvalidDataGraceMs = 8000; // 流媒体无效时长容错期
   final Map<String, int?> _jellyfinServerSubtitleSelections = {};

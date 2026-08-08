@@ -10,7 +10,17 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     EmbyResolvedTrackBundle? embyTrackSelection,
     PlaybackDetailContext? playbackDetailContext,
     bool resetManualDanmakuOffset = true,
+    bool preserveEmbyAccountKey = false,
   }) async {
+    final isRequestedEmbyStream = videoPath.startsWith('emby://');
+    final requestedEmbyAccountKey = isRequestedEmbyStream
+        ? (preserveEmbyAccountKey
+            ? _currentEmbyAccountKey
+            : embyAccountKey(
+                EmbyService.instance.currentProfile,
+                EmbyService.instance.userId,
+              ))
+        : null;
     var mediaPrepareStarted = false;
     var mediaPrepareCompleted = false;
     // 每次切换新视频时，重置自动连播倒计时状态，防止高强度测试下卡死
@@ -295,6 +305,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     _currentVideoPath = videoPath;
     _currentActualPlayUrl = resolvedActualPlayUrl; // 存储实际播放URL
     _currentPlaybackSession = resolvedSession;
+    _currentEmbyAccountKey = requestedEmbyAccountKey;
     print('historyItem: $historyItem');
     // 仅当 historyItem 已被识别（有 animeId）时，其 animeName 才是可信的番剧名。
     // WebDAV/SMB 的 _loadWebDavEpisodes/_loadSmbEpisodes 创建的占位记录中

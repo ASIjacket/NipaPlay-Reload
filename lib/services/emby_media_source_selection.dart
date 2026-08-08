@@ -159,12 +159,12 @@ Future<PlaybackSession> createEmbyPlaybackSessionForCandidate({
       subtitleStreamIndex: subtitle.mode == EmbyResolvedTrackMode.track
           ? subtitle.sourceIndex
           : null,
-      burnInSubtitle: _requiresSubtitleBurnIn(subtitle),
+      burnInSubtitle: requiresEmbySubtitleBurnIn(subtitle),
     ),
   );
 }
 
-bool _requiresSubtitleBurnIn(EmbyResolvedTrackSelection subtitle) {
+bool requiresEmbySubtitleBurnIn(EmbyResolvedTrackSelection subtitle) {
   if (subtitle.mode != EmbyResolvedTrackMode.track) return false;
   final fingerprint = subtitle.fingerprint;
   if (fingerprint == null || fingerprint.isExternal != false) return false;

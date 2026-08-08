@@ -729,6 +729,92 @@ extension JellyfinQualitySwitch on VideoPlayerState {
 
 // ==== Emby 清晰度切换：平滑重载当前流 ====
 extension EmbyQualitySwitch on VideoPlayerState {
+  EmbySelectionContext? get currentEmbySelectionContext {
+    final path = _currentVideoPath;
+    if (path == null || !path.startsWith('emby://')) return null;
+    final seriesId = embySeriesIdFromSourceKey(
+      _playbackDetailContext?.sourceKey,
+    );
+    if (seriesId == null) return null;
+    final episodeId = path.replaceFirst('emby://', '').split('/').last.trim();
+    final accountKey = _currentEmbyAccountKey;
+    if (episodeId.isEmpty ||
+        accountKey == null ||
+        _currentPlaybackSession?.itemId != episodeId) {
+      return null;
+    }
+    return EmbySelectionContext(
+      accountKey: accountKey,
+      seriesId: seriesId,
+      episodeId: episodeId,
+    );
+  }
+
+  EmbyMediaSourceDescriptor? embyMediaSourceDescriptor([String? sourceId]) {
+    final session = _currentPlaybackSession;
+    if (session == null) return null;
+    final targetId = sourceId ?? session.mediaSourceId;
+    for (final entry in session.mediaSources.asMap().entries) {
+      if (entry.value.id == targetId) {
+        return describeEmbyMediaSource(entry.value, ordinal: entry.key);
+      }
+    }
+    if (sourceId != null) return null;
+    final selected = session.selectedSource;
+    if (selected == null) return null;
+    final ordinal = session.mediaSources.indexOf(selected);
+    return describeEmbyMediaSource(
+      selected,
+      ordinal: ordinal < 0 ? 0 : ordinal,
+    );
+  }
+
+  Future<EmbyPlayerMenuSelectionService>
+      _embyPlayerMenuSelectionService() async {
+    final preferences = await SharedPreferences.getInstance();
+    return EmbyPlayerMenuSelectionService(
+      store: EmbyMediaPreferenceStore(preferences),
+      resolver: DefaultEmbyMediaSelectionResolver(),
+    );
+  }
+
+  Future<EmbyResolvedTrackBundle> resolveCurrentEmbyTracksForSource(
+    EmbyMediaSourceDescriptor source,
+  ) async {
+    final context = currentEmbySelectionContext;
+    if (context == null) {
+      return DefaultEmbyMediaSelectionResolver()
+          .resolve(
+            sources: <EmbyMediaSourceDescriptor>[source],
+            preferences: const EmbyPreferenceLayers(),
+          )
+          .candidates
+          .first
+          .tracks;
+    }
+    final service = await _embyPlayerMenuSelectionService();
+    return service.resolveTracksForSource(
+      context: context,
+      currentSource: source,
+    );
+  }
+
+  Future<bool> persistCurrentEmbyManualPatch(
+    EmbyManualSelectionPatch patch, {
+    EmbyMediaSourceDescriptor? currentSource,
+  }) async {
+    final source = currentSource ?? embyMediaSourceDescriptor();
+    if (source == null) return false;
+    final context = currentEmbySelectionContext;
+    if (context == null) return false;
+    final service = await _embyPlayerMenuSelectionService();
+    return service.persistCurrentManualPatch(
+      context: context,
+      currentSource: source,
+      patch: patch,
+    );
+  }
+
   Future<void> reloadCurrentEmbyStream({
     required JellyfinVideoQuality quality,
     int? serverSubtitleIndex,
@@ -739,6 +825,7 @@ extension EmbyQualitySwitch on VideoPlayerState {
   }) async {
     final previousSession = _currentPlaybackSession;
     final previousTrackSelection = _currentEmbyTrackSelection;
+    final previousAccountKey = _currentEmbyAccountKey;
     if (_currentVideoPath == null ||
         !_currentVideoPath!.startsWith('emby://')) {
       return;
@@ -825,6 +912,7 @@ extension EmbyQualitySwitch on VideoPlayerState {
             embyTrackSelection: tracks,
             playbackDetailContext: currentDetailContext,
             resetManualDanmakuOffset: false,
+            preserveEmbyAccountKey: true,
           );
           ensureEmbyPlayerOpened(_error, hasVideo);
           EmbyPlaybackSyncService().updatePlaybackSession(session);
@@ -841,6 +929,7 @@ extension EmbyQualitySwitch on VideoPlayerState {
     } catch (e) {
       _currentPlaybackSession = previousSession;
       _currentEmbyTrackSelection = previousTrackSelection;
+      _currentEmbyAccountKey = previousAccountKey;
       if (previousSession != null) {
         EmbyPlaybackSyncService().updatePlaybackSession(previousSession);
       }

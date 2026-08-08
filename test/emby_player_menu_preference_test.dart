@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nipaplay/models/emby_media_selection.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
@@ -83,20 +85,24 @@ void main() {
     );
 
     final serverAudio = preferenceForEmbyServerAudio(source, 3);
-    expect(serverAudio.mode, EmbyTrackPreferenceMode.track);
-    expect(serverAudio.sourceIndex, 3);
-    expect(serverAudio.mediaSourceId, 'source-tracks');
-    expect(serverAudio.fingerprint?.language, 'jpn');
-    expect(serverAudio.fingerprint?.normalizedTitle, 'main audio');
-    expect(serverAudio.fingerprint?.codec, 'EAC3');
-    expect(serverAudio.fingerprint?.channels, 6);
+    expect(serverAudio, isNotNull);
+    final selectedServerAudio = serverAudio!;
+    expect(selectedServerAudio.mode, EmbyTrackPreferenceMode.track);
+    expect(selectedServerAudio.sourceIndex, 3);
+    expect(selectedServerAudio.mediaSourceId, 'source-tracks');
+    expect(selectedServerAudio.fingerprint?.language, 'jpn');
+    expect(selectedServerAudio.fingerprint?.normalizedTitle, 'main audio');
+    expect(selectedServerAudio.fingerprint?.codec, 'EAC3');
+    expect(selectedServerAudio.fingerprint?.channels, 6);
 
     final serverSubtitle = preferenceForEmbyServerSubtitle(source, 4);
-    expect(serverSubtitle.mode, EmbyTrackPreferenceMode.track);
-    expect(serverSubtitle.sourceIndex, 4);
-    expect(serverSubtitle.mediaSourceId, 'source-tracks');
-    expect(serverSubtitle.fingerprint?.language, 'zho');
-    expect(serverSubtitle.fingerprint?.isExternal, isTrue);
+    expect(serverSubtitle, isNotNull);
+    final selectedServerSubtitle = serverSubtitle!;
+    expect(selectedServerSubtitle.mode, EmbyTrackPreferenceMode.track);
+    expect(selectedServerSubtitle.sourceIndex, 4);
+    expect(selectedServerSubtitle.mediaSourceId, 'source-tracks');
+    expect(selectedServerSubtitle.fingerprint?.language, 'zho');
+    expect(selectedServerSubtitle.fingerprint?.isExternal, isTrue);
 
     final nativeAudio = preferenceForEmbyNativeAudio(
       _nativeAudio(
@@ -127,6 +133,49 @@ void main() {
     expect(nativeSubtitle.fingerprint?.language, 'zho');
     expect(nativeSubtitle.fingerprint?.normalizedTitle, 'simplified chinese');
     expect(nativeSubtitle.fingerprint?.codec, 'ass');
+  });
+
+  test('rejects stale server track indexes instead of clearing preferences',
+      () {
+    final source = _source('source-a', '[Baha] Episode 01');
+
+    expect(preferenceForEmbyServerAudio(source, 999), isNull);
+    expect(preferenceForEmbyServerSubtitle(source, 999), isNull);
+  });
+
+  test('native adapters fall back to non-empty metadata values', () {
+    final audio = preferenceForEmbyNativeAudio(
+      PlayerAudioStreamInfo(
+        codec: PlayerAudioCodecParams(name: '', channels: 2),
+        title: '',
+        language: '',
+        metadata: const <String, String>{
+          'title': 'Main Audio',
+          'language': 'jpn',
+          'codec': 'aac',
+        },
+        rawRepresentation: 'audio',
+      ),
+    );
+    final subtitle = preferenceForEmbyNativeSubtitle(
+      PlayerSubtitleStreamInfo(
+        title: '',
+        language: '',
+        metadata: const <String, String>{
+          'title': 'Simplified Chinese',
+          'language': 'zho',
+          'codec': 'ass',
+        },
+        rawRepresentation: 'subtitle',
+      ),
+    );
+
+    expect(audio.fingerprint?.language, 'jpn');
+    expect(audio.fingerprint?.normalizedTitle, 'main audio');
+    expect(audio.fingerprint?.codec, 'aac');
+    expect(subtitle.fingerprint?.language, 'zho');
+    expect(subtitle.fingerprint?.normalizedTitle, 'simplified chinese');
+    expect(subtitle.fingerprint?.codec, 'ass');
   });
 
   test('source switch resolves its track bundle before reloading', () async {
@@ -383,6 +432,99 @@ void main() {
 
     expect(applied, surfaces);
     expect(persisted, surfaces);
+  });
+
+  test('a menu surface rejects re-entry until its selection completes',
+      () async {
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    var secondApplyCalls = 0;
+    var secondPersistCalls = 0;
+
+    final first = runMediaServerMenuSelection(
+      MediaServerMenuSurface.nipaplayAudio,
+      true,
+      () async {
+        entered.complete();
+        await release.future;
+      },
+      () async => true,
+    );
+    await entered.future;
+
+    try {
+      final otherSurface = await runMediaServerMenuSelection(
+        MediaServerMenuSurface.cupertinoAudio,
+        true,
+        () async {},
+        () async => true,
+      );
+      final second = await runMediaServerMenuSelection(
+        MediaServerMenuSurface.nipaplayAudio,
+        true,
+        () async => secondApplyCalls++,
+        () async {
+          secondPersistCalls++;
+          return true;
+        },
+      );
+
+      expect(otherSurface, isTrue);
+      expect(second, isFalse);
+      expect(secondApplyCalls, 0);
+      expect(secondPersistCalls, 0);
+    } finally {
+      if (!release.isCompleted) release.complete();
+    }
+    expect(await first, isTrue);
+
+    final afterCompletion = await runMediaServerMenuSelection(
+      MediaServerMenuSurface.nipaplayAudio,
+      true,
+      () async => secondApplyCalls++,
+      () async => true,
+    );
+    expect(afterCompletion, isTrue);
+    expect(secondApplyCalls, 1);
+  });
+
+  test('a failed menu selection releases its surface lock', () async {
+    final failure = StateError('apply failed');
+    await expectLater(
+      runMediaServerMenuSelection(
+        MediaServerMenuSurface.cupertinoSubtitle,
+        true,
+        () async => throw failure,
+        () async => true,
+      ),
+      throwsA(same(failure)),
+    );
+
+    final retry = await runMediaServerMenuSelection(
+      MediaServerMenuSurface.cupertinoSubtitle,
+      true,
+      () async {},
+      () async => true,
+    );
+    expect(retry, isTrue);
+
+    final persistFailure = StateError('persist failed');
+    await expectLater(
+      runMediaServerMenuSelection(
+        MediaServerMenuSurface.cupertinoSubtitle,
+        true,
+        () async {},
+        () async => throw persistFailure,
+      ),
+      throwsA(same(persistFailure)),
+    );
+    final retryAfterPersistFailure = await runMediaServerMenuSelection(
+      MediaServerMenuSurface.cupertinoSubtitle,
+      true,
+      () async {},
+      () async => true,
+    );
+    expect(retryAfterPersistFailure, isTrue);
   });
 }
 
