@@ -1,10 +1,18 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/models/emby_media_selection.dart';
 import 'package:nipaplay/models/jellyfin_model.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/services/emby_media_preference_store.dart';
+import 'package:nipaplay/services/emby_media_selection_controller.dart';
+import 'package:nipaplay/services/emby_media_selection_resolver.dart';
+import 'package:nipaplay/services/emby_media_source_catalog.dart';
 import 'package:nipaplay/services/emby_media_source_selection.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
@@ -116,6 +124,10 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
 
   TabController? _tabController;
   String? _hoveredEpisodeId;
+  late final CachedEmbyMediaSourceCatalog _embyMediaSourceCatalog;
+  late final Future<EmbyMediaPreferenceStore> _embyPreferenceStore;
+  late final String _embyPageCacheScope;
+  final Map<String, String> _embySavedSourceLabels = <String, String>{};
 
   // 辅助方法：获取演员头像URL
   String? _getActorImageUrl(dynamic actor) {
@@ -185,6 +197,12 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
   @override
   void initState() {
     super.initState();
+    _embyMediaSourceCatalog = CachedEmbyMediaSourceCatalog(
+      loader: EmbyService.instance.getPlaybackMediaSources,
+    );
+    _embyPreferenceStore = SharedPreferences.getInstance()
+        .then((preferences) => EmbyMediaPreferenceStore(preferences));
+    _embyPageCacheScope = 'detail:${identityHashCode(this)}';
     _loadMediaDetail();
     // _tabController = TabController(length: 2, vsync: this); // 延迟到加载后初始化
     // _tabController!.addListener(() {
@@ -326,6 +344,9 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
           _episodesBySeasonId[seasonId] = episodes;
           _isLoading = false;
         });
+        if (widget.serverType == MediaServerType.emby) {
+          unawaited(_loadSavedEmbySourceLabels(List<dynamic>.from(episodes)));
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -334,6 +355,82 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
           _isLoading = false;
         });
       }
+    }
+  }
+
+  EmbySelectionContext? _embySelectionContextFor(dynamic episode) {
+    final service = EmbyService.instance;
+    final rawSeriesId = episode.seriesId?.toString().trim();
+    final fallbackSeriesId =
+        _mediaDetail?.id?.toString().trim() ?? widget.mediaId.trim();
+    return buildEmbySelectionContext(
+      profile: service.currentProfile,
+      userId: service.userId,
+      seriesId:
+          rawSeriesId?.isNotEmpty == true ? rawSeriesId! : fallbackSeriesId,
+      episodeId: episode.id.toString(),
+    );
+  }
+
+  Future<void> _loadSavedEmbySourceLabels(List<dynamic> episodes) async {
+    final store = await _embyPreferenceStore;
+    final labels = <String, String>{};
+    for (final episode in episodes) {
+      final selectionContext = _embySelectionContextFor(episode);
+      if (selectionContext == null) continue;
+      final layers = await store.load(selectionContext);
+      final series = layers.series;
+      final fullName = series?.normalizedFullName?.trim();
+      if (fullName?.isNotEmpty == true) {
+        labels[episode.id.toString()] = fullName!;
+        continue;
+      }
+      final families = series?.families.isNotEmpty == true
+          ? series!.families
+          : layers.global?.families;
+      if (families != null && families.isNotEmpty) {
+        labels[episode.id.toString()] = families.first;
+      }
+    }
+    if (!mounted || labels.isEmpty) return;
+    setState(() => _embySavedSourceLabels.addAll(labels));
+  }
+
+  Future<void> _openEmbyMediaSelection(dynamic episode) async {
+    final store = await _embyPreferenceStore;
+    if (!mounted) return;
+
+    final selectionContext = _embySelectionContextFor(episode);
+    final controller = DefaultEmbyMediaSelectionController(
+      catalog: _embyMediaSourceCatalog,
+      store: store,
+      resolver: DefaultEmbyMediaSelectionResolver(),
+      context: selectionContext,
+      catalogScopeKey: selectionContext?.accountKey ?? _embyPageCacheScope,
+      itemId: episode.id.toString(),
+    );
+    final load = controller.load();
+    try {
+      final result = await showEmbyMediaSelection(
+        context: context,
+        useCupertino: !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS,
+        controller: controller,
+      );
+      if (!mounted) return;
+      updateEmbySavedSourceLabelAfterSelection(
+        result,
+        controller,
+        (label) => setState(() {
+          _embySavedSourceLabels[episode.id.toString()] = label;
+        }),
+      );
+    } finally {
+      try {
+        await load;
+      } catch (_) {
+        // The panel already exposes loading failures and retry controls.
+      }
+      controller.dispose();
     }
   }
 
@@ -1901,6 +1998,13 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
           final Color playIconColor =
               isEpisodeHovered ? accentColor : secondaryTextColor;
           final Color titleColor = isEpisodeHovered ? accentColor : textColor;
+          final showMediaSelectionEntry = shouldShowEmbyMediaSelectionEntry(
+            isEmby: widget.serverType == MediaServerType.emby,
+            isWindows:
+                !kIsWeb && defaultTargetPlatform == TargetPlatform.windows,
+            isIOS: !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS,
+            isLargeScreen: NipaplayLargeScreenModeScope.isActiveOf(context),
+          );
 
           return MouseRegion(
             cursor: playHoverEnabled
@@ -1996,6 +2100,16 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (showMediaSelectionEntry)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: EmbyMediaSelectionEntry(
+                        savedSourceLabel:
+                            _embySavedSourceLabels[episode.id.toString()],
+                        onOpen: () =>
+                            unawaited(_openEmbyMediaSelection(episode)),
+                      ),
+                    ),
                   if (episode.userData?.played == true)
                     Padding(
                       padding: const EdgeInsets.only(right: 8.0),
