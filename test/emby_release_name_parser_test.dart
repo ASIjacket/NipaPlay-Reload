@@ -23,7 +23,28 @@ void main() {
 
       expect(identity.normalizedFullName, 'web dl lolihouse');
       expect(identity.families, {'lolihouse'});
-      expect(identity.features, isEmpty);
+      expect(identity.features, {'web-dl'});
+    });
+
+    test('keeps release formats as features rather than release families', () {
+      final identity = parseEmbyReleaseIdentity('BluRay.LoliHouse.1080p');
+
+      expect(identity.families, {'lolihouse'});
+      expect(identity.features, {'bluray'});
+    });
+
+    test('normalizes split release formats without leaking tokens to families',
+        () {
+      final webRip = parseEmbyReleaseIdentity('WEB-Rip.Baha.1080p');
+      final bluRay = parseEmbyReleaseIdentity('Blu-Ray.LoliHouse.1080p');
+      final bdRip = parseEmbyReleaseIdentity('BD-Rip.Baha.1080p');
+
+      expect(webRip.features, {'web-rip'});
+      expect(webRip.families, {'baha'});
+      expect(bluRay.features, {'bluray'});
+      expect(bluRay.families, {'lolihouse'});
+      expect(bdRip.features, {'bdrip'});
+      expect(bdRip.families, {'baha'});
     });
 
     test('preserves non-technical release families across writing systems', () {
