@@ -60,8 +60,7 @@ bool _isTechnical(String token) =>
       'eac3',
     }.contains(token);
 
-bool _isReleaseFormat(String token) =>
-    const {
+bool _isReleaseFormat(String token) => const {
       'web',
       'dl',
       'webdl',
@@ -74,5 +73,5 @@ bool _isReleaseFormat(String token) =>
     }.contains(token);
 
 bool _isFeature(String token) => RegExp(
-  r'[\u7b80\u7e41]|\u5185\u5c01|\u5185\u5d4c|\u5916\u6302|\u5b57\u5e55|\u53cc\u8bed|\u4e2d\u5b57',
-).hasMatch(token);
+      r'[\u7b80\u7e41]|\u5185\u5c01|\u5185\u5d4c|\u5916\u6302|\u5b57\u5e55|\u53cc\u8bed|\u4e2d\u5b57',
+    ).hasMatch(token);

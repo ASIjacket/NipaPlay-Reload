@@ -8,8 +8,7 @@ abstract interface class EmbyMediaSelectionResolver {
   });
 }
 
-class DefaultEmbyMediaSelectionResolver
-    implements EmbyMediaSelectionResolver {
+class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
   @override
   EmbyResolutionPlan resolve({
     required List<EmbyMediaSourceDescriptor> sources,
@@ -22,14 +21,16 @@ class DefaultEmbyMediaSelectionResolver
     final candidates = <EmbySourceCandidate>[];
     final includedIds = <String>{};
 
-    void addMatching(
-      EmbySelectionReason reason,
-      bool Function(EmbyMediaSourceDescriptor source) matches,
-      {bool rankBySimilarity = true}
-    ) {
-      final matchingSources = sources.asMap().entries.where(
+    void addMatching(EmbySelectionReason reason,
+        bool Function(EmbyMediaSourceDescriptor source) matches,
+        {bool rankBySimilarity = true}) {
+      final matchingSources = sources
+          .asMap()
+          .entries
+          .where(
             (entry) => matches(entry.value),
-          ).toList()
+          )
+          .toList()
         ..sort((left, right) {
           if (!rankBySimilarity) return left.key.compareTo(right.key);
           final scoreDifference = _similarityScore(
@@ -82,8 +83,7 @@ class DefaultEmbyMediaSelectionResolver
     if (seriesFamilies.isNotEmpty) {
       addMatching(
         EmbySelectionReason.seriesFamily,
-        (source) =>
-            _sharesFamily(identities[source]!.families, seriesFamilies),
+        (source) => _sharesFamily(identities[source]!.families, seriesFamilies),
       );
     }
 
@@ -91,8 +91,7 @@ class DefaultEmbyMediaSelectionResolver
     if (globalFamilies.isNotEmpty) {
       addMatching(
         EmbySelectionReason.globalFamily,
-        (source) =>
-            _sharesFamily(identities[source]!.families, globalFamilies),
+        (source) => _sharesFamily(identities[source]!.families, globalFamilies),
       );
     }
 
@@ -275,10 +274,8 @@ int _similarityScore(
     ...?preferences.global?.families,
   }.map(_normalizedText).whereType<String>().toSet();
   final preferredFeatures = preferences.series?.features ?? const <String>{};
-  final normalizedFeatures = preferredFeatures
-      .map(_normalizedText)
-      .whereType<String>()
-      .toSet();
+  final normalizedFeatures =
+      preferredFeatures.map(_normalizedText).whereType<String>().toSet();
   final featureMatches = identity.features
       .map(_normalizedText)
       .whereType<String>()

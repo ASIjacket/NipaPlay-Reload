@@ -481,8 +481,8 @@ void main() {
       (await SharedPreferences.getInstance())
           .getString('emby_media_preferences_v1')!,
     ) as Map<String, dynamic>;
-    final account =
-        (persisted['accounts'] as Map)[contextA.accountKey] as Map<String, dynamic>;
+    final account = (persisted['accounts'] as Map)[contextA.accountKey]
+        as Map<String, dynamic>;
     expect(account['episodes'], isNotNull);
     expect(account['series'], isNull);
     expect(account['global'], isNull);

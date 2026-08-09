@@ -168,8 +168,10 @@ class DirectPlayProfile {
     return {
       'Type': type,
       if (container != null && container!.isNotEmpty) 'Container': container,
-      if (videoCodec != null && videoCodec!.isNotEmpty) 'VideoCodec': videoCodec,
-      if (audioCodec != null && audioCodec!.isNotEmpty) 'AudioCodec': audioCodec,
+      if (videoCodec != null && videoCodec!.isNotEmpty)
+        'VideoCodec': videoCodec,
+      if (audioCodec != null && audioCodec!.isNotEmpty)
+        'AudioCodec': audioCodec,
     };
   }
 }
@@ -206,8 +208,10 @@ class TranscodingProfile {
       'Type': type,
       'Container': container,
       'Protocol': protocol,
-      if (videoCodec != null && videoCodec!.isNotEmpty) 'VideoCodec': videoCodec,
-      if (audioCodec != null && audioCodec!.isNotEmpty) 'AudioCodec': audioCodec,
+      if (videoCodec != null && videoCodec!.isNotEmpty)
+        'VideoCodec': videoCodec,
+      if (audioCodec != null && audioCodec!.isNotEmpty)
+        'AudioCodec': audioCodec,
       if (maxAudioChannels != null) 'MaxAudioChannels': maxAudioChannels,
       if (minSegments != null) 'MinSegments': minSegments,
       if (breakOnNonKeyFrames != null)
@@ -254,8 +258,10 @@ class ResponseProfile {
     return {
       'Type': type,
       'Container': container,
-      if (videoCodec != null && videoCodec!.isNotEmpty) 'VideoCodec': videoCodec,
-      if (audioCodec != null && audioCodec!.isNotEmpty) 'AudioCodec': audioCodec,
+      if (videoCodec != null && videoCodec!.isNotEmpty)
+        'VideoCodec': videoCodec,
+      if (audioCodec != null && audioCodec!.isNotEmpty)
+        'AudioCodec': audioCodec,
     };
   }
 }
