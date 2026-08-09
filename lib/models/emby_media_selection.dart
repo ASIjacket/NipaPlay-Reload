@@ -226,18 +226,25 @@ class EmbyResolvedTrackBundle {
 class EmbyEpisodePreference {
   const EmbyEpisodePreference({
     this.mediaSourceId,
+    this.displayName,
     this.audio,
     this.subtitle,
     required this.updatedAt,
   });
 
   final String? mediaSourceId;
+
+  /// Original media-source name retained for this episode's UI label.
+  final String? displayName;
   final EmbyTrackPreference? audio;
   final EmbyTrackPreference? subtitle;
   final DateTime updatedAt;
 
   bool get isEmpty =>
-      mediaSourceId == null && audio == null && subtitle == null;
+      mediaSourceId == null &&
+      displayName == null &&
+      audio == null &&
+      subtitle == null;
 }
 
 class EmbySeriesPreference {

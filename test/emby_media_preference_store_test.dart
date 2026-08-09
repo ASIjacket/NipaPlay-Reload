@@ -71,6 +71,7 @@ void main() {
     expect(layers.episode?.mediaSourceId, 'source-b');
     expect(layers.episode?.audio?.fingerprint, japaneseStereo);
     expect(layers.episode?.audio?.sourceIndex, 1);
+    expect(layers.episode?.displayName, 'WEB-DL.Baha');
     expect(layers.series?.normalizedFullName, 'web dl baha');
     expect(layers.series?.families, contains('baha'));
     expect(layers.series?.audio?.fingerprint, japaneseStereo);

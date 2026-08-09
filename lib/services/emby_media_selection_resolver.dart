@@ -23,7 +23,10 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
 
     void addMatching(EmbySelectionReason reason,
         bool Function(EmbyMediaSourceDescriptor source) matches,
-        {bool rankBySimilarity = true}) {
+        {bool rankBySimilarity = true,
+        Set<String> preferredFamilies = const <String>{},
+        Set<String> preferredFeatures = const <String>{},
+        EmbyTechnicalFingerprint? preferredTechnical}) {
       final matchingSources = sources
           .asMap()
           .entries
@@ -36,12 +39,16 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
           final scoreDifference = _similarityScore(
             right.value,
             identities[right.value]!,
-            preferences,
+            preferredFamilies: preferredFamilies,
+            preferredFeatures: preferredFeatures,
+            preferredTechnical: preferredTechnical,
           ).compareTo(
             _similarityScore(
               left.value,
               identities[left.value]!,
-              preferences,
+              preferredFamilies: preferredFamilies,
+              preferredFeatures: preferredFeatures,
+              preferredTechnical: preferredTechnical,
             ),
           );
           return scoreDifference != 0
@@ -67,6 +74,27 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
       addMatching(
         EmbySelectionReason.episodeExact,
         (source) => source.source.id == episodeSourceId,
+        rankBySimilarity: false,
+      );
+    }
+
+    final globalFamilies = preferences.global?.families ?? const <String>{};
+    if (globalFamilies.isNotEmpty) {
+      addMatching(
+        EmbySelectionReason.globalFamily,
+        (source) => _sharesFamily(identities[source]!.families, globalFamilies),
+        preferredFamilies: globalFamilies,
+        preferredTechnical: preferences.global?.technical,
+      );
+    }
+
+    final globalTechnical = preferences.global?.technical;
+    if (globalTechnical != null && _hasTechnicalCriteria(globalTechnical)) {
+      addMatching(
+        EmbySelectionReason.technical,
+        (source) => _technicalSimilarity(source.technical, globalTechnical) > 0,
+        preferredFamilies: globalFamilies,
+        preferredTechnical: globalTechnical,
       );
     }
 
@@ -76,6 +104,9 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
       addMatching(
         EmbySelectionReason.seriesFullName,
         (source) => identities[source]!.normalizedFullName == normalized,
+        preferredFamilies: preferences.series?.families ?? const <String>{},
+        preferredFeatures: preferences.series?.features ?? const <String>{},
+        preferredTechnical: preferences.series?.technical,
       );
     }
 
@@ -84,23 +115,20 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
       addMatching(
         EmbySelectionReason.seriesFamily,
         (source) => _sharesFamily(identities[source]!.families, seriesFamilies),
+        preferredFamilies: seriesFamilies,
+        preferredFeatures: preferences.series?.features ?? const <String>{},
+        preferredTechnical: preferences.series?.technical,
       );
     }
 
-    final globalFamilies = preferences.global?.families ?? const <String>{};
-    if (globalFamilies.isNotEmpty) {
-      addMatching(
-        EmbySelectionReason.globalFamily,
-        (source) => _sharesFamily(identities[source]!.families, globalFamilies),
-      );
-    }
-
-    final technical =
-        preferences.series?.technical ?? preferences.global?.technical;
-    if (technical != null && _hasTechnicalCriteria(technical)) {
+    final seriesTechnical = preferences.series?.technical;
+    if (seriesTechnical != null && _hasTechnicalCriteria(seriesTechnical)) {
       addMatching(
         EmbySelectionReason.technical,
-        (source) => _technicalSimilarity(source.technical, technical) > 0,
+        (source) => _technicalSimilarity(source.technical, seriesTechnical) > 0,
+        preferredFamilies: seriesFamilies,
+        preferredFeatures: preferences.series?.features ?? const <String>{},
+        preferredTechnical: seriesTechnical,
       );
     }
 
@@ -120,24 +148,28 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
         audio: _resolveTrack(
           sourceId: source.source.id,
           tracks: source.audioTracks,
-          preference: preferences.episode?.audio ??
-              preferences.series?.audio ??
-              preferences.global?.audio,
+          preferences: <EmbyTrackPreference?>[
+            preferences.episode?.audio,
+            preferences.global?.audio,
+            preferences.series?.audio,
+          ],
           indexOf: (track) => track.index,
           fingerprintOf: (track) => track.fingerprint,
-          isDefaultOf: (track) => track.isDefault,
           allowTechnicalFallback: true,
+          requireSubtitleKindAndCodec: false,
         ),
         subtitle: _resolveTrack(
           sourceId: source.source.id,
           tracks: source.subtitleTracks,
-          preference: preferences.episode?.subtitle ??
-              preferences.series?.subtitle ??
-              preferences.global?.subtitle,
+          preferences: <EmbyTrackPreference?>[
+            preferences.episode?.subtitle,
+            preferences.global?.subtitle,
+            preferences.series?.subtitle,
+          ],
           indexOf: (track) => track.index,
           fingerprintOf: (track) => track.fingerprint,
-          isDefaultOf: (track) => track.isDefault,
-          allowTechnicalFallback: false,
+          allowTechnicalFallback: true,
+          requireSubtitleKindAndCodec: true,
         ),
       );
 }
@@ -145,45 +177,47 @@ class DefaultEmbyMediaSelectionResolver implements EmbyMediaSelectionResolver {
 EmbyResolvedTrackSelection _resolveTrack<T>({
   required String sourceId,
   required List<T> tracks,
-  required EmbyTrackPreference? preference,
+  required List<EmbyTrackPreference?> preferences,
   required int Function(T track) indexOf,
   required EmbyTrackFingerprint Function(T track) fingerprintOf,
-  required bool Function(T track) isDefaultOf,
   required bool allowTechnicalFallback,
+  required bool requireSubtitleKindAndCodec,
 }) {
-  if (preference == null ||
-      preference.mode == EmbyTrackPreferenceMode.followDefault) {
-    return const EmbyResolvedTrackSelection.followDefault();
-  }
-  if (preference.mode == EmbyTrackPreferenceMode.disabled) {
-    return const EmbyResolvedTrackSelection.disabled();
-  }
+  for (final preference in preferences) {
+    if (preference == null) continue;
+    if (preference.mode == EmbyTrackPreferenceMode.followDefault) {
+      return const EmbyResolvedTrackSelection.followDefault();
+    }
+    if (preference.mode == EmbyTrackPreferenceMode.disabled) {
+      return const EmbyResolvedTrackSelection.disabled();
+    }
 
-  final exactIndex = preference.sourceIndex;
-  T? matchedTrack;
-  if (preference.mediaSourceId == sourceId && exactIndex != null) {
-    for (final track in tracks) {
-      if (indexOf(track) == exactIndex) {
-        matchedTrack = track;
-        break;
+    final exactIndex = preference.sourceIndex;
+    T? matchedTrack;
+    if (preference.mediaSourceId == sourceId && exactIndex != null) {
+      for (final track in tracks) {
+        if (indexOf(track) == exactIndex) {
+          matchedTrack = track;
+          break;
+        }
       }
     }
-  }
 
-  matchedTrack ??= _firstMatchingTrack(
-    tracks,
-    preference.fingerprint,
-    fingerprintOf,
-    allowTechnicalFallback: allowTechnicalFallback,
-  );
-  matchedTrack ??= _firstWhereOrNull(tracks, isDefaultOf);
-  if (matchedTrack == null) {
-    return const EmbyResolvedTrackSelection.followDefault();
+    matchedTrack ??= _firstMatchingTrack(
+      tracks,
+      preference.fingerprint,
+      fingerprintOf,
+      allowTechnicalFallback: allowTechnicalFallback,
+      requireSubtitleKindAndCodec: requireSubtitleKindAndCodec,
+    );
+    if (matchedTrack != null) {
+      return EmbyResolvedTrackSelection.track(
+        sourceIndex: indexOf(matchedTrack),
+        fingerprint: fingerprintOf(matchedTrack),
+      );
+    }
   }
-  return EmbyResolvedTrackSelection.track(
-    sourceIndex: indexOf(matchedTrack),
-    fingerprint: fingerprintOf(matchedTrack),
-  );
+  return const EmbyResolvedTrackSelection.followDefault();
 }
 
 T? _firstMatchingTrack<T>(
@@ -191,6 +225,7 @@ T? _firstMatchingTrack<T>(
   EmbyTrackFingerprint? preferred,
   EmbyTrackFingerprint Function(T track) fingerprintOf, {
   required bool allowTechnicalFallback,
+  required bool requireSubtitleKindAndCodec,
 }) {
   if (preferred == null) return null;
 
@@ -221,19 +256,21 @@ T? _firstMatchingTrack<T>(
 
   final channels = preferred.channels;
   final codec = _normalizedText(preferred.codec);
+  final isExternal = preferred.isExternal;
+  if (requireSubtitleKindAndCodec) {
+    if (codec == null || isExternal == null) return null;
+    return find(
+      (value) =>
+          _normalizedText(value.codec) == codec &&
+          value.isExternal == isExternal,
+    );
+  }
   if (channels == null && codec == null) return null;
   return find(
     (value) =>
         (channels == null || value.channels == channels) &&
         (codec == null || _normalizedText(value.codec) == codec),
   );
-}
-
-T? _firstWhereOrNull<T>(List<T> values, bool Function(T value) matches) {
-  for (final value in values) {
-    if (matches(value)) return value;
-  }
-  return null;
 }
 
 String _normalizeFullName(String value) =>
@@ -266,14 +303,13 @@ String? _normalizedText(String? value) {
 
 int _similarityScore(
   EmbyMediaSourceDescriptor source,
-  EmbyReleaseIdentity identity,
-  EmbyPreferenceLayers preferences,
-) {
-  final preferredFamilies = <String>{
-    ...?preferences.series?.families,
-    ...?preferences.global?.families,
-  }.map(_normalizedText).whereType<String>().toSet();
-  final preferredFeatures = preferences.series?.features ?? const <String>{};
+  EmbyReleaseIdentity identity, {
+  required Set<String> preferredFamilies,
+  required Set<String> preferredFeatures,
+  required EmbyTechnicalFingerprint? preferredTechnical,
+}) {
+  final normalizedFamilies =
+      preferredFamilies.map(_normalizedText).whereType<String>().toSet();
   final normalizedFeatures =
       preferredFeatures.map(_normalizedText).whereType<String>().toSet();
   final featureMatches = identity.features
@@ -284,13 +320,13 @@ int _similarityScore(
   final familyMatches = identity.families
       .map(_normalizedText)
       .whereType<String>()
-      .where(preferredFamilies.contains)
+      .where(normalizedFamilies.contains)
       .length;
   return familyMatches * 100 +
       featureMatches * 10 +
       _technicalSimilarity(
         source.technical,
-        preferences.series?.technical ?? preferences.global?.technical,
+        preferredTechnical,
       );
 }
 

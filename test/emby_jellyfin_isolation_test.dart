@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nipaplay/models/emby_media_selection.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
@@ -9,6 +11,36 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('Jellyfin selections on the same surface are not locked', () async {
+    final firstStarted = Completer<void>();
+    final releaseFirst = Completer<void>();
+    var applyCalls = 0;
+
+    final first = runMediaServerMenuSelection(
+      MediaServerMenuSurface.nipaplaySource,
+      false,
+      () async {
+        applyCalls++;
+        firstStarted.complete();
+        await releaseFirst.future;
+      },
+      () async => throw StateError('Jellyfin must not persist Emby state'),
+    );
+    await firstStarted.future;
+
+    final second = runMediaServerMenuSelection(
+      MediaServerMenuSurface.nipaplaySource,
+      false,
+      () async => applyCalls++,
+      () async => throw StateError('Jellyfin must not persist Emby state'),
+    );
+    await second;
+
+    expect(applyCalls, 2);
+    releaseFirst.complete();
+    await first;
+  });
 
   for (final surface in _sixMenuSurfaces) {
     test('${surface.name} Jellyfin path only applies its existing switch',

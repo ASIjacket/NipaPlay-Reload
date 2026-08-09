@@ -14,7 +14,7 @@ void main() {
 
   final resolver = DefaultEmbyMediaSelectionResolver();
 
-  test('orders exact episode, series name, family, technical and default', () {
+  test('orders exact episode, global, series, technical and default', () {
     final sources = [
       _source(id: 'episode', name: 'WEB-DL.Crunchyroll', height: 2160),
       _source(id: 'series', name: 'WEB-DL.LoliHouse', height: 720),
@@ -42,15 +42,15 @@ void main() {
       plan.candidates.map((candidate) => candidate.reason),
       [
         EmbySelectionReason.episodeExact,
-        EmbySelectionReason.seriesFullName,
         EmbySelectionReason.globalFamily,
         EmbySelectionReason.technical,
+        EmbySelectionReason.seriesFullName,
         EmbySelectionReason.embyDefault,
       ],
     );
     expect(
       plan.candidates.map((candidate) => candidate.source.source.id),
-      ['episode', 'series', 'family', 'technical', 'default'],
+      ['episode', 'family', 'technical', 'series', 'default'],
     );
   });
 
@@ -128,7 +128,7 @@ void main() {
     expect(plan.candidates[1].tracks.audio.sourceIndex, 1);
   });
 
-  test('prefers series technical settings over global technical settings', () {
+  test('prefers global technical settings before series fallback', () {
     final plan = resolver.resolve(
       sources: [
         _source(id: 'global', name: 'RAW.Global', height: 2160),
@@ -144,8 +144,131 @@ void main() {
       ),
     );
 
+    expect(plan.candidates.first.source.source.id, 'global');
+    expect(plan.candidates.first.reason, EmbySelectionReason.technical);
+  });
+
+  test('ranks global family candidates only with global preferences', () {
+    final plan = resolver.resolve(
+      sources: [
+        _source(
+          id: 'series-shaped',
+          name: 'WEB-DL.Baha.1080p',
+          height: 1080,
+        ),
+        _source(
+          id: 'global-shaped',
+          name: 'WEB-DL.Baha.2160p',
+          height: 2160,
+        ),
+      ],
+      preferences: const EmbyPreferenceLayers(
+        global: EmbyGlobalPreference(
+          families: {'baha'},
+          technical: EmbyTechnicalFingerprint(height: 2160),
+        ),
+        series: EmbySeriesPreference(
+          families: {'baha'},
+          technical: EmbyTechnicalFingerprint(height: 1080),
+        ),
+      ),
+    );
+
+    expect(plan.candidates.first.source.source.id, 'global-shaped');
+    expect(plan.candidates.first.reason, EmbySelectionReason.globalFamily);
+  });
+
+  test('uses series technical settings when global criteria do not match', () {
+    final plan = resolver.resolve(
+      sources: [
+        _source(id: 'default', name: 'RAW.Default', height: 720),
+        _source(id: 'series', name: 'RAW.Series', height: 1080),
+      ],
+      preferences: const EmbyPreferenceLayers(
+        global: EmbyGlobalPreference(
+          technical: EmbyTechnicalFingerprint(height: 2160),
+        ),
+        series: EmbySeriesPreference(
+          technical: EmbyTechnicalFingerprint(height: 1080),
+        ),
+      ),
+    );
+
     expect(plan.candidates.first.source.source.id, 'series');
     expect(plan.candidates.first.reason, EmbySelectionReason.technical);
+  });
+
+  test('falls through unmatched episode and global tracks to series', () {
+    const unavailable = EmbyTrackFingerprint(
+      language: 'eng',
+      normalizedTitle: 'commentary',
+      codec: 'ac3',
+      channels: 6,
+      isExternal: false,
+    );
+    final source = _source(
+      id: 'candidate',
+      name: 'WEB-DL.Baha',
+      audioTracks: [_audio(index: 4, fingerprint: japaneseStereo)],
+    );
+
+    final tracks = resolver
+        .resolve(
+          sources: [source],
+          preferences: EmbyPreferenceLayers(
+            episode: EmbyEpisodePreference(
+              audio: const EmbyTrackPreference.track(unavailable),
+              updatedAt: DateTime(2026, 8, 9),
+            ),
+            global: const EmbyGlobalPreference(
+              audio: EmbyTrackPreference.track(unavailable),
+            ),
+            series: const EmbySeriesPreference(
+              audio: EmbyTrackPreference.track(japaneseStereo),
+            ),
+          ),
+        )
+        .candidates
+        .single
+        .tracks;
+
+    expect(tracks.audio.sourceIndex, 4);
+  });
+
+  test('uses a matching global track before the series track', () {
+    const seriesAudio = EmbyTrackFingerprint(
+      language: 'jpn',
+      normalizedTitle: 'commentary',
+      codec: 'aac',
+      channels: 2,
+      isExternal: false,
+    );
+    final source = _source(
+      id: 'candidate',
+      name: 'WEB-DL.Baha',
+      audioTracks: [
+        _audio(index: 1, fingerprint: seriesAudio),
+        _audio(index: 2, fingerprint: japaneseStereo),
+      ],
+    );
+
+    final tracks = resolver
+        .resolve(
+          sources: [source],
+          preferences: const EmbyPreferenceLayers(
+            global: EmbyGlobalPreference(
+              audio: EmbyTrackPreference.track(japaneseStereo),
+            ),
+            series: EmbySeriesPreference(
+              audio: EmbyTrackPreference.track(seriesAudio),
+            ),
+          ),
+        )
+        .candidates
+        .single
+        .tracks;
+
+    expect(tracks.audio.sourceIndex, 2);
   });
 
   test('ranks family variants by matching features and technical details', () {
@@ -310,8 +433,7 @@ void main() {
     expect(tracks.subtitle.sourceIndex, 3);
   });
 
-  test(
-      'falls back to audio channels and codec before leaving an unmatched subtitle at default',
+  test('falls back by audio technical details and subtitle kind plus codec',
       () {
     const preferredAudio = EmbyTrackFingerprint(
       language: 'jpn',
@@ -370,7 +492,137 @@ void main() {
         .tracks;
 
     expect(tracks.audio.sourceIndex, 5);
-    expect(tracks.subtitle.mode, EmbyResolvedTrackMode.followDefault);
+    expect(tracks.subtitle.mode, EmbyResolvedTrackMode.track);
+    expect(tracks.subtitle.sourceIndex, 9);
+  });
+
+  test('subtitle technical fallback keeps embedded and external distinct', () {
+    const preferred = EmbyTrackFingerprint(
+      language: 'eng',
+      normalizedTitle: 'english',
+      codec: 'ass',
+      isExternal: true,
+    );
+    final source = _source(
+      id: 'candidate',
+      name: 'WEB-DL.Baha',
+      subtitleTracks: [
+        _subtitle(
+          index: 3,
+          fingerprint: const EmbyTrackFingerprint(
+            language: 'chi',
+            normalizedTitle: 'embedded',
+            codec: 'ass',
+            isExternal: false,
+          ),
+        ),
+        _subtitle(
+          index: 8,
+          fingerprint: const EmbyTrackFingerprint(
+            language: 'chi',
+            normalizedTitle: 'external',
+            codec: 'ass',
+            isExternal: true,
+          ),
+        ),
+      ],
+    );
+
+    final subtitle = resolver
+        .resolve(
+          sources: [source],
+          preferences: const EmbyPreferenceLayers(
+            global: EmbyGlobalPreference(
+              subtitle: EmbyTrackPreference.track(preferred),
+            ),
+          ),
+        )
+        .candidates
+        .single
+        .tracks
+        .subtitle;
+
+    expect(subtitle.sourceIndex, 8);
+  });
+
+  test('audio technical fallback ignores external state by itself', () {
+    final source = _source(
+      id: 'candidate',
+      name: 'WEB-DL.Baha',
+      audioTracks: [
+        _audio(
+          index: 4,
+          fingerprint: const EmbyTrackFingerprint(isExternal: false),
+        ),
+      ],
+    );
+
+    final audio = resolver
+        .resolve(
+          sources: [source],
+          preferences: const EmbyPreferenceLayers(
+            global: EmbyGlobalPreference(
+              audio: EmbyTrackPreference.track(
+                EmbyTrackFingerprint(isExternal: false),
+              ),
+            ),
+          ),
+        )
+        .candidates
+        .single
+        .tracks
+        .audio;
+
+    expect(audio.mode, EmbyResolvedTrackMode.followDefault);
+  });
+
+  test('incomplete global subtitle fingerprint falls through to series', () {
+    const incompleteGlobal = EmbyTrackFingerprint(
+      language: 'eng',
+      normalizedTitle: 'english',
+      isExternal: true,
+    );
+    const seriesSubtitle = EmbyTrackFingerprint(
+      language: 'chi',
+      normalizedTitle: 'traditional',
+      codec: 'ass',
+      isExternal: true,
+    );
+    final source = _source(
+      id: 'candidate',
+      name: 'WEB-DL.Baha',
+      subtitleTracks: [
+        _subtitle(
+          index: 7,
+          fingerprint: const EmbyTrackFingerprint(
+            language: 'chi',
+            normalizedTitle: 'simplified',
+            codec: 'srt',
+            isExternal: true,
+          ),
+        ),
+        _subtitle(index: 8, fingerprint: seriesSubtitle),
+      ],
+    );
+
+    final subtitle = resolver
+        .resolve(
+          sources: [source],
+          preferences: const EmbyPreferenceLayers(
+            global: EmbyGlobalPreference(
+              subtitle: EmbyTrackPreference.track(incompleteGlobal),
+            ),
+            series: EmbySeriesPreference(
+              subtitle: EmbyTrackPreference.track(seriesSubtitle),
+            ),
+          ),
+        )
+        .candidates
+        .single
+        .tracks
+        .subtitle;
+
+    expect(subtitle.sourceIndex, 8);
   });
 
   test(

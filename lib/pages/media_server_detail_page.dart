@@ -380,6 +380,11 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
       if (selectionContext == null) continue;
       final layers = await store.load(selectionContext);
       final series = layers.series;
+      final displayName = layers.episode?.displayName?.trim();
+      if (displayName?.isNotEmpty == true) {
+        labels[episode.id.toString()] = displayName!;
+        continue;
+      }
       final fullName = series?.normalizedFullName?.trim();
       if (fullName?.isNotEmpty == true) {
         labels[episode.id.toString()] = fullName!;

@@ -122,21 +122,13 @@ Future<bool> runMediaServerMenuSelection(
   Future<void> Function() applySelection,
   Future<bool> Function() persistEmbySelection,
 ) async {
-  // The surface is deliberately explicit at every call site so reviews and
-  // diagnostics can distinguish the six player-menu entry points.
-  switch (surface) {
-    case MediaServerMenuSurface.nipaplaySource:
-    case MediaServerMenuSurface.nipaplayAudio:
-    case MediaServerMenuSurface.nipaplaySubtitle:
-    case MediaServerMenuSurface.cupertinoSource:
-    case MediaServerMenuSurface.cupertinoAudio:
-    case MediaServerMenuSurface.cupertinoSubtitle:
-      break;
+  if (!isEmby) {
+    await applySelection();
+    return false;
   }
   if (!_activeMenuSelections.add(surface)) return false;
   try {
     await applySelection();
-    if (!isEmby) return false;
     return await persistEmbySelection();
   } finally {
     _activeMenuSelections.remove(surface);

@@ -175,18 +175,26 @@ _EpisodeRecord? _patchEpisode(
   DateTime now,
 ) {
   var mediaSourceId = existing?.mediaSourceId;
+  var displayName = existing?.displayName;
   var audio = existing?.audio;
   var subtitle = existing?.subtitle;
 
   if (patch.source != null) {
     mediaSourceId = _nonEmpty(patch.source!.source.id);
+    displayName = _nonEmpty(patch.source!.displayName);
   }
   audio = _applyTrackPatch(audio, patch.audio);
   subtitle = _applyTrackPatch(subtitle, patch.subtitle);
 
-  if (mediaSourceId == null && audio == null && subtitle == null) return null;
+  if (mediaSourceId == null &&
+      displayName == null &&
+      audio == null &&
+      subtitle == null) {
+    return null;
+  }
   return _EpisodeRecord(
     mediaSourceId: mediaSourceId,
+    displayName: displayName,
     audio: audio,
     subtitle: subtitle,
     updatedAt: now.toUtc(),
@@ -385,6 +393,7 @@ class _AccountRecord {
 class _EpisodeRecord {
   const _EpisodeRecord({
     this.mediaSourceId,
+    this.displayName,
     this.audio,
     this.subtitle,
     required this.updatedAt,
@@ -394,13 +403,18 @@ class _EpisodeRecord {
     final updatedAt = DateTime.tryParse(_nonEmpty(raw['updatedAt']) ?? '');
     if (updatedAt == null) return null;
     final mediaSourceId = _nonEmpty(raw['mediaSourceId']);
+    final displayName = _nonEmpty(raw['displayName']);
     final audio = _decodeTrack(raw['audio'], allowBinding: true);
     final subtitle = _decodeTrack(raw['subtitle'], allowBinding: true);
-    if (mediaSourceId == null && audio == null && subtitle == null) {
+    if (mediaSourceId == null &&
+        displayName == null &&
+        audio == null &&
+        subtitle == null) {
       return null;
     }
     return _EpisodeRecord(
       mediaSourceId: mediaSourceId,
+      displayName: displayName,
       audio: audio,
       subtitle: subtitle,
       updatedAt: updatedAt.toUtc(),
@@ -408,12 +422,14 @@ class _EpisodeRecord {
   }
 
   final String? mediaSourceId;
+  final String? displayName;
   final EmbyTrackPreference? audio;
   final EmbyTrackPreference? subtitle;
   final DateTime updatedAt;
 
   EmbyEpisodePreference get preference => EmbyEpisodePreference(
         mediaSourceId: mediaSourceId,
+        displayName: displayName,
         audio: audio,
         subtitle: subtitle,
         updatedAt: updatedAt,
@@ -421,6 +437,7 @@ class _EpisodeRecord {
 
   Map<String, Object?> toJson() => {
         if (mediaSourceId != null) 'mediaSourceId': mediaSourceId,
+        if (displayName != null) 'displayName': displayName,
         if (audio != null) 'audio': _trackToJson(audio!),
         if (subtitle != null) 'subtitle': _trackToJson(subtitle!),
         'updatedAt': updatedAt.toIso8601String(),
