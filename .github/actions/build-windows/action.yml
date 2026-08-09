@@ -4,10 +4,14 @@ inputs:
   app-version:
     description: '应用版本号'
     required: true
+  portable-only:
+    description: '只保留可直接运行的 Windows Release 目录'
+    required: false
+    default: 'false'
 outputs:
   zip-path:
     description: '生成的 ZIP 文件路径'
-    value: ${{ steps.build.outputs.zip_path }}
+    value: ${{ steps.package.outputs.zip_path }}
   installer-path:
     description: '生成的安装程序路径'
     value: ${{ steps.installer.outputs.installer_path }}
@@ -438,9 +442,6 @@ runs:
           throw "flutter build windows failed with exit code $flutterExitCode"
         }
 
-        $arch = "x64"
-        $version = "${{ inputs.app-version }}"
-        $DestDir = "build\windows\NipaPlay_${version}_Windows_x64"
         $SrcDir = "build\windows\x64\runner\Release"
         $CustomLib = "windows\libmpv-2.dll"
         if (!(Test-Path $SrcDir)) {
@@ -451,11 +452,22 @@ runs:
         }
         Copy-Item -Path $CustomLib -Destination "$SrcDir\libmpv-2.dll" -Force
         Write-Host "已将构建输出中的 libmpv-2.dll 替换为完整版"
-        New-Item -Path $DestDir -ItemType Directory -Force
-        Copy-Item -Path "$SrcDir\*" -Destination $DestDir -Recurse -Force
-        Copy-Item -Path "windows\*.dll" -Destination $DestDir -Force
+
+    - name: Create Windows ZIP package
+      id: package
+      if: inputs.portable-only != 'true'
+      shell: pwsh
+      run: |
+        $version = "${{ inputs.app-version }}"
+        $srcDir = "build\windows\x64\runner\Release"
+        $destDir = "build\windows\NipaPlay_${version}_Windows_x64"
+        if (!(Test-Path $srcDir)) {
+          throw "Windows 构建输出目录不存在：$srcDir"
+        }
+        New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        Copy-Item -Path "$srcDir\*" -Destination $destDir -Recurse -Force
         $zipPath = "build\windows\NipaPlay_${version}_Windows_x64.zip"
-        Compress-Archive -Path $DestDir -DestinationPath $zipPath -Force
+        Compress-Archive -Path $destDir -DestinationPath $zipPath -Force
         echo "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
 
     - name: Save Erika native dependency bundle
@@ -474,11 +486,13 @@ runs:
         key: ${{ steps.restore-erika-native-sources.outputs.cache-primary-key }}
 
     - name: Install Inno Setup
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         choco install innosetup --no-progress -y
 
     - name: Ensure Inno Setup Chinese language file
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         $langFile = Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\Languages\ChineseSimplified.isl"
@@ -515,6 +529,7 @@ runs:
 
     - name: Create Windows installer with Inno Setup
       id: installer
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         $arch = "x64"
@@ -635,6 +650,7 @@ runs:
 
     - name: Update msix_version to match app version
       id: update_msix_version
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         $appVersion = "${{ inputs.app-version }}"
@@ -678,6 +694,7 @@ runs:
 
     - name: Build MSIX package
       id: msix_build
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         Write-Host "Building MSIX package using msix:create..."

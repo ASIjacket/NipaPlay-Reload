@@ -3,7 +3,19 @@ name: Build Windows
 on:
   # 允许在 Actions 页面手动触发，构建单独的 Windows 产物（无需走完整 release 流程）。
   workflow_dispatch:
+    inputs:
+      portable_only:
+        description: '只生成可直接运行的 Windows 便携版'
+        required: true
+        default: true
+        type: boolean
   workflow_call:
+    inputs:
+      portable_only:
+        description: '只生成可直接运行的 Windows 便携版'
+        required: false
+        default: false
+        type: boolean
     outputs:
       version:
         description: '应用版本号'
@@ -22,6 +34,7 @@ jobs:
       version: ${{ steps.setup.outputs.version }}
       artifact-name: release-Windows-x64
     env:
+      GITHUB_TOKEN: ${{ github.token }}
       FVP_DEPS_URL: https://sourceforge.net/projects/mdk-sdk/files/nightly
       # Keep FVP_DEPS_LATEST unset (treated as 0): with it on, fvp's deps.cmake
       # re-fetches mdk-sdk's .md5 from the SourceForge web frontend during
@@ -50,11 +63,18 @@ jobs:
         uses: ./.github/actions/build-windows
         with:
           app-version: ${{ steps.setup.outputs.version }}
-      
-      - name: Clean flutter pub cache
-        run: flutter pub cache clean
-      
-      - name: Upload Windows Artifacts
+          portable-only: ${{ inputs.portable_only }}
+
+      - name: Upload portable Windows artifact
+        if: inputs.portable_only == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: NipaPlay-Windows-x64-portable
+          path: build/windows/x64/runner/Release/
+          if-no-files-found: error
+
+      - name: Upload Windows release artifacts
+        if: inputs.portable_only != true
         uses: actions/upload-artifact@v4
         with:
           name: release-Windows-x64
@@ -64,7 +84,7 @@ jobs:
 
       - name: Upload Dart debug symbols (for de-obfuscating crash stacks)
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && inputs.portable_only != true
         with:
           name: dart-symbols-Windows
           path: build/symbols-windows/
