@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/nipaplay_window.dart';
@@ -6,6 +8,20 @@ import 'package:provider/provider.dart';
 typedef EmbySelectionContentBuilder = Widget Function(
   ValueChanged<bool> close,
 );
+
+/// Calculates responsive size limits for the desktop Emby selection dialog.
+({double maxWidth, double maxHeightFactor}) calculateEmbySelectionDialogMetrics(
+    Size screenSize) {
+  final targetWidth = (screenSize.width * 0.72).clamp(680.0, 860.0).toDouble();
+  final targetHeight =
+      (screenSize.height * 0.78).clamp(560.0, 760.0).toDouble();
+  return (
+    maxWidth: screenSize.width <= 0 ? 0.0 : targetWidth,
+    maxHeightFactor: screenSize.height <= 0
+        ? 0.0
+        : math.min(targetHeight / screenSize.height, 1.0),
+  );
+}
 
 /// Shows media selection inside the standard desktop window surface.
 Future<bool?> showEmbyMediaSelectionDialog({
@@ -23,9 +39,13 @@ Future<bool?> showEmbyMediaSelectionDialog({
     barrierDismissible: false,
     child: Builder(
       builder: (dialogContext) {
+        final metrics = calculateEmbySelectionDialogMetrics(
+          MediaQuery.sizeOf(dialogContext),
+        );
         return NipaplayWindowScaffold(
-          maxWidth: 960,
-          maxHeightFactor: 0.88,
+          maxWidth: metrics.maxWidth,
+          maxHeightFactor: metrics.maxHeightFactor,
+          respectMaxSizeInFilledScreen: true,
           onClose: () => guardKey.currentState?.dismiss(),
           child: _EmbySelectionDialogGuard(
             key: guardKey,
