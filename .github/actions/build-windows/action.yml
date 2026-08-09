@@ -4,10 +4,14 @@ inputs:
   app-version:
     description: '应用版本号'
     required: true
+  portable-only:
+    description: '只保留可直接运行的 Windows Release 目录'
+    required: false
+    default: 'false'
 outputs:
   zip-path:
     description: '生成的 ZIP 文件路径'
-    value: ${{ steps.build.outputs.zip_path }}
+    value: ${{ steps.package.outputs.zip_path }}
   installer-path:
     description: '生成的安装程序路径'
     value: ${{ steps.installer.outputs.installer_path }}
@@ -156,12 +160,9 @@ runs:
         $mdkSdkPkg = "mdk-sdk-windows-desktop-vs2022-x64.7z"
         $archivePath = Join-Path $fvpDir "windows\$mdkSdkPkg"
 
-        # SourceForge intermittently serves an HTML interstitial/anti-bot page
-        # to CI runners instead of the 7z archive, which makes 7-Zip fail with
-        # "Is not archive". Download from several mirrors and validate the 7z
-        # magic bytes (37 7A BC AF 27 1C) before extracting; fall back to the
-        # GitHub release asset (which fvp's deps.cmake cannot use directly
-        # because it hardcodes the vs2022-x64 filename that only SourceForge has).
+        # Prefer the pinned VS2022 GitHub release because SourceForge may reject
+        # CI runners. Keep SourceForge mirrors as fallbacks and validate the 7z
+        # magic bytes (37 7A BC AF 27 1C) before extracting.
         $sig = [byte[]](0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c)
         $ua = @{ "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
 
@@ -174,19 +175,9 @@ runs:
           return $true
         }
 
-        function Get-MdkSdkReleaseAsset {
-          param(
-            [object]$Release,
-            [string[]]$Patterns
-          )
-          foreach ($pattern in $Patterns) {
-            $asset = $Release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
-            if ($asset) { return $asset }
-          }
-          return $null
-        }
-
         $candidates = @(
+          "https://github.com/wang-bin/mdk-sdk/releases/download/v0.35.1/$mdkSdkPkg",
+          "https://github.com/wang-bin/mdk-sdk/releases/download/v0.35.0/$mdkSdkPkg",
           "https://sourceforge.net/projects/mdk-sdk/files/nightly/$mdkSdkPkg/download",
           "https://downloads.sourceforge.net/project/mdk-sdk/nightly/$mdkSdkPkg",
           "https://master.dl.sourceforge.net/project/mdk-sdk/nightly/$mdkSdkPkg"
@@ -216,39 +207,7 @@ runs:
         }
 
         if (-not $downloaded) {
-          $releaseApi = "https://api.github.com/repos/wang-bin/mdk-sdk/releases/latest"
-          $headers = @{
-            "User-Agent" = "NipaPlay-Build"
-            "Accept" = "application/vnd.github+json"
-          }
-          if ($env:GITHUB_TOKEN) {
-            $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
-          }
-          try {
-            $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers -UseBasicParsing -TimeoutSec 60
-          } catch {
-            throw "Unable to query mdk-sdk latest release: $($_.Exception.Message)"
-          }
-          $assetPatterns = @(
-            "^mdk-sdk-windows-x64-vs[0-9]+\.7z$",
-            "^mdk-sdk-windows-vs[0-9]+\.7z$",
-            "^mdk-sdk-windows-x64\.7z$",
-            "^mdk-sdk-windows\.7z$",
-            "^mdk-sdk-windows-vs[0-9]+-ltl\.7z$"
-          )
-          $asset = Get-MdkSdkReleaseAsset -Release $release -Patterns $assetPatterns
-          if (-not $asset) {
-            $available = ($release.assets | ForEach-Object { $_.name }) -join ", "
-            throw "No compatible Windows mdk-sdk asset found in $($release.tag_name). Available assets: $available"
-          }
-          $ghPkg = $asset.name
-          $ghUrl = $asset.browser_download_url
-          $archivePath = Join-Path $fvpDir "windows\$ghPkg"
-          Write-Host "SourceForge mirrors unavailable; falling back to GitHub release $($release.tag_name) asset $ghPkg ..."
-          Invoke-WebRequest -Uri $ghUrl -OutFile $archivePath -UseBasicParsing -TimeoutSec 180 -Headers $ua
-          if (-not (Test-SevenZip $archivePath)) {
-            throw "GitHub fallback download was not a valid 7z archive: $archivePath"
-          }
+          throw "Unable to download a valid VS2022-compatible mdk-sdk archive."
         }
 
         # Extract using 7-Zip (CMake's tar can't handle 7z on Windows reliably)
@@ -438,9 +397,6 @@ runs:
           throw "flutter build windows failed with exit code $flutterExitCode"
         }
 
-        $arch = "x64"
-        $version = "${{ inputs.app-version }}"
-        $DestDir = "build\windows\NipaPlay_${version}_Windows_x64"
         $SrcDir = "build\windows\x64\runner\Release"
         $CustomLib = "windows\libmpv-2.dll"
         if (!(Test-Path $SrcDir)) {
@@ -451,11 +407,22 @@ runs:
         }
         Copy-Item -Path $CustomLib -Destination "$SrcDir\libmpv-2.dll" -Force
         Write-Host "已将构建输出中的 libmpv-2.dll 替换为完整版"
-        New-Item -Path $DestDir -ItemType Directory -Force
-        Copy-Item -Path "$SrcDir\*" -Destination $DestDir -Recurse -Force
-        Copy-Item -Path "windows\*.dll" -Destination $DestDir -Force
+
+    - name: Create Windows ZIP package
+      id: package
+      if: inputs.portable-only != 'true'
+      shell: pwsh
+      run: |
+        $version = "${{ inputs.app-version }}"
+        $srcDir = "build\windows\x64\runner\Release"
+        $destDir = "build\windows\NipaPlay_${version}_Windows_x64"
+        if (!(Test-Path $srcDir)) {
+          throw "Windows 构建输出目录不存在：$srcDir"
+        }
+        New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        Copy-Item -Path "$srcDir\*" -Destination $destDir -Recurse -Force
         $zipPath = "build\windows\NipaPlay_${version}_Windows_x64.zip"
-        Compress-Archive -Path $DestDir -DestinationPath $zipPath -Force
+        Compress-Archive -Path $destDir -DestinationPath $zipPath -Force
         echo "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
 
     - name: Save Erika native dependency bundle
@@ -474,11 +441,13 @@ runs:
         key: ${{ steps.restore-erika-native-sources.outputs.cache-primary-key }}
 
     - name: Install Inno Setup
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         choco install innosetup --no-progress -y
 
     - name: Ensure Inno Setup Chinese language file
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         $langFile = Join-Path "${env:ProgramFiles(x86)}" "Inno Setup 6\Languages\ChineseSimplified.isl"
@@ -515,6 +484,7 @@ runs:
 
     - name: Create Windows installer with Inno Setup
       id: installer
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         $arch = "x64"
@@ -635,6 +605,7 @@ runs:
 
     - name: Update msix_version to match app version
       id: update_msix_version
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         $appVersion = "${{ inputs.app-version }}"
@@ -678,6 +649,7 @@ runs:
 
     - name: Build MSIX package
       id: msix_build
+      if: inputs.portable-only != 'true'
       shell: pwsh
       run: |
         Write-Host "Building MSIX package using msix:create..."
