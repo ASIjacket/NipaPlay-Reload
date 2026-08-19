@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nipaplay/pages/media_server_detail_page.dart';
 
 void main() {
-  testWidgets('successful Emby playback closes the original detail route',
+  testWidgets('starting Emby playback closes the original detail route',
       (tester) async {
     final playback = Completer<void>();
 
@@ -40,15 +40,14 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('play'));
-    await tester.pump();
-    expect(find.text('episode-detail'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('episode-detail'), findsNothing);
 
     playback.complete();
     await tester.pumpAndSettle();
-    expect(find.text('episode-detail'), findsNothing);
   });
 
-  testWidgets('failed Emby playback keeps the detail route for fallback',
+  testWidgets('failed Emby playback still closes the detail route',
       (tester) async {
     Object? caughtError;
     await tester.pumpWidget(
@@ -87,7 +86,7 @@ void main() {
     await tester.tap(find.text('play'));
     await tester.pumpAndSettle();
 
-    expect(find.text('episode-detail'), findsOneWidget);
+    expect(find.text('episode-detail'), findsNothing);
     expect(caughtError, isA<StateError>());
   });
 
