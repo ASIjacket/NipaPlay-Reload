@@ -53,10 +53,10 @@ Future<void> startEmbyPlaybackAndCloseDetail({
   required NavigatorState detailNavigator,
   required Future<void> Function() startPlayback,
 }) async {
-  await startPlayback();
   if (detailNavigator.mounted) {
     detailNavigator.pop();
   }
+  await startPlayback();
 }
 
 class MediaServerDetailPage extends StatefulWidget {
