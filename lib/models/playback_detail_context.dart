@@ -26,6 +26,7 @@ class PlaybackDetailEpisode {
     this.actualPlayUrl,
     this.playbackSession,
     this.progress,
+    this.mediaKey,
   });
 
   final String id;
@@ -38,26 +39,105 @@ class PlaybackDetailEpisode {
   final String? actualPlayUrl;
   final PlaybackSession? playbackSession;
   final double? progress;
+  final String? mediaKey;
 }
 
 typedef PlaybackDetailEpisodeLoader = Future<List<PlaybackDetailEpisode>>
     Function();
 
+/// Keeps one playlist snapshot per active playback source and coalesces
+/// concurrent loads. Failed loads are not cached, so the end-of-playback
+/// check can retry if background preloading failed temporarily.
+class PlaybackPlaylistCache {
+  String? _sourceKey;
+  List<PlaybackDetailEpisode>? _episodes;
+  Future<List<PlaybackDetailEpisode>>? _pendingLoad;
+  int _generation = 0;
+
+  Future<List<PlaybackDetailEpisode>> load({
+    required String sourceKey,
+    required PlaybackDetailEpisodeLoader loader,
+  }) async {
+    if (_sourceKey != sourceKey) {
+      invalidate();
+      _sourceKey = sourceKey;
+    }
+
+    final cached = _episodes;
+    if (cached != null) return cached;
+
+    final pending = _pendingLoad;
+    if (pending != null) return pending;
+
+    final loadGeneration = _generation;
+    late final Future<List<PlaybackDetailEpisode>> loadFuture;
+    loadFuture = Future<List<PlaybackDetailEpisode>>.sync(loader).then(
+      (episodes) {
+        final snapshot = List<PlaybackDetailEpisode>.unmodifiable(episodes);
+        if (_generation == loadGeneration && _sourceKey == sourceKey) {
+          _episodes = snapshot;
+        }
+        return snapshot;
+      },
+    );
+    _pendingLoad = loadFuture;
+
+    try {
+      return await loadFuture;
+    } finally {
+      if (identical(_pendingLoad, loadFuture)) {
+        _pendingLoad = null;
+      }
+    }
+  }
+
+  void invalidate() {
+    _generation++;
+    _sourceKey = null;
+    _episodes = null;
+    _pendingLoad = null;
+  }
+}
+
 class PlaybackPlaylist {
   const PlaybackPlaylist._();
 
-  static PlaybackDetailEpisode? next(
+  static PlaylistCursorResult locate(
     List<PlaybackDetailEpisode> episodes,
-    String currentPath, {
-    bool Function(String candidate, String current)? isSamePath,
+    String currentMediaKey, {
+    String Function(PlaybackDetailEpisode episode)? identityOf,
   }) {
-    final matches = isSamePath ?? (candidate, current) => candidate == current;
+    final resolveIdentity =
+        identityOf ?? (episode) => episode.mediaKey ?? episode.videoPath;
     final currentIndex = episodes.indexWhere(
-      (episode) => matches(episode.videoPath, currentPath),
+      (episode) => resolveIdentity(episode) == currentMediaKey,
     );
-    if (currentIndex < 0 || currentIndex >= episodes.length - 1) return null;
-    return episodes[currentIndex + 1];
+    if (currentIndex < 0) return const PlaylistCurrentNotFound();
+    if (currentIndex >= episodes.length - 1) return const PlaylistAtEnd();
+    return PlaylistHasNext(episodes[currentIndex + 1]);
   }
+}
+
+sealed class PlaylistCursorResult {
+  const PlaylistCursorResult();
+}
+
+class PlaylistHasNext extends PlaylistCursorResult {
+  const PlaylistHasNext(this.episode);
+  final PlaybackDetailEpisode episode;
+}
+
+class PlaylistAtEnd extends PlaylistCursorResult {
+  const PlaylistAtEnd();
+}
+
+class PlaylistCurrentNotFound extends PlaylistCursorResult {
+  const PlaylistCurrentNotFound();
+}
+
+class PlaylistLoadFailed extends PlaylistCursorResult {
+  const PlaylistLoadFailed(this.error);
+  final Object error;
 }
 
 class PlaybackDetailContext {

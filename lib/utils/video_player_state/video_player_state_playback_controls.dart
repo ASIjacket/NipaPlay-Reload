@@ -111,6 +111,11 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       // 截图已完成，_currentThumbnailPath 是最新值，不会被旧缩略图覆盖
       if (_currentVideoPath != null) {
         await _updateWatchHistory(forceRemoteSync: true);
+        unawaited(
+          AutoSyncService.instance.syncOnPlaybackEnd().catchError((error) {
+            debugPrint('退出播放时增量同步失败: $error');
+          }),
+        );
       }
 
       // Jellyfin同步：如果是Jellyfin流媒体，停止同步
@@ -184,6 +189,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       // 重置状态
       await _clearTimelinePreviewFiles();
       _currentVideoPath = null;
+      _currentMediaKey = null;
       _macOSWindowHostedVideoRect = null;
       _danmakuOverlayKey = 'idle'; // 重置弹幕覆盖层key
       _position = Duration.zero;
@@ -280,6 +286,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     bool clearPreviousMessages = false,
     bool resetState = false,
   }) {
+    final wasPlaying = _status == PlayerStatus.playing;
     if (newStatus == PlayerStatus.idle || resetState) {
       _resetVideoState();
     }
@@ -321,6 +328,11 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
 
     // Wakelock logic
     if (_status == PlayerStatus.playing) {
+      // 视频一开始播放就后台预热播放列表。片尾的“是否有下一话”检查
+      // 会直接命中缓存，不再等待 WebDAV/SMB/媒体服务器枚举目录。
+      if (!wasPlaying) {
+        unawaited(preloadPlaybackPlaylist());
+      }
       try {
         WakelockPlus.enable();
         ////debugPrint("Wakelock enabled: Playback started/resumed.");
@@ -355,6 +367,40 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     }
 
     _notifyListeners();
+  }
+
+  void _requestPlaybackErrorDialog() {
+    if (_playbackErrorDialogRequested || _isDisposed) return;
+    _playbackErrorDialogRequested = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_isDisposed) return;
+      final callback = onSeriousPlaybackErrorAndShouldPop;
+      if (callback != null) {
+        callback();
+        return;
+      }
+
+      // Fallback for playback surfaces that have not installed the normal UI
+      // callback. Remote load failures must never remain silent.
+      final dialogContext = _context;
+      if (dialogContext == null || !dialogContext.mounted) return;
+      unawaited(
+        BlurDialog.show<void>(
+          context: dialogContext,
+          title: '播放错误',
+          content: _error ?? '远程视频载入失败，请检查网络或存储设备。',
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                resetPlayer();
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   void togglePlayPause() {
@@ -427,6 +473,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       _smoothAnchorElapsedUs = _lastElapsedUs;
       _seekTargetMs = 0.0; // 启用 seek 保护，而非清除
       _anchorSetBySeek = true; // 标记锚点由 seek/loop 设置
+      _seekRevision++;
       // [LOOP-RESTART-DIAG] 诊断：记录重置后的锚点状态
       if (!kReleaseMode) {
         debugPrint('[LOOP-RESTART-DIAG] AFTER RESET: '
@@ -529,7 +576,8 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   void play() {
     // <<< ADDED DEBUG LOG >>>
     debugPrint(
-      '[VideoPlayerState] play() called. hasVideo: $hasVideo, _status: $_status, currentMedia: ${player.media}',
+      '[VideoPlayerState] play() called. hasVideo: $hasVideo, _status: $_status, '
+      'currentMedia: ${_redactMediaUrlForLog(player.media)}',
     );
     final bool isWindowsMediaKit = !kIsWeb &&
         Platform.isWindows &&
@@ -697,8 +745,10 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     }
     _subtitleManager.clearExternalSubtitle(notifyListenersToo: false);
     _currentVideoPath = null;
+    _currentMediaKey = null;
     _currentActualPlayUrl = null; // 清除实际播放URL
     _currentPlaybackSession = null;
+    _currentEmbyAccountKey = null;
     _lastPlaybackStartMs = 0;
     _danmakuOverlayKey = 'idle'; // 重置弹幕覆盖层key
     _currentVideoHash = null;
@@ -709,6 +759,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _animeId = null; // 清除弹幕ID
     _initialHistoryItem = null;
     _playbackDetailContext = null;
+    _playbackPlaylistCache.invalidate();
     _danmakuList.clear();
     _danmakuListVersion++;
     _danmakuTracks.clear();
@@ -770,8 +821,10 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       _error = null;
     }
     _currentVideoPath = null;
+    _currentMediaKey = null;
     _currentActualPlayUrl = null;
     _currentPlaybackSession = null;
+    _currentEmbyAccountKey = null;
     _danmakuOverlayKey = 'idle'; // 重置弹幕覆盖层key
     _currentVideoHash = null;
     _currentThumbnailPath = null;
@@ -783,6 +836,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _animeId = null; // 清除弹幕ID
     _initialHistoryItem = null;
     _playbackDetailContext = null;
+    _playbackPlaylistCache.invalidate();
     _danmakuList.clear();
     _danmakuListVersion++;
     _danmakuTracks.clear();
@@ -853,6 +907,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       _smoothAnchorElapsedUs = _lastElapsedUs;
       _seekTargetMs = _position.inMilliseconds.toDouble();
       _anchorSetBySeek = true; // 标记锚点由 seek 设置
+      _seekRevision++;
       if (_duration.inMilliseconds > 0) {
         _progress = clampedPosition.inMilliseconds / _duration.inMilliseconds;
       }

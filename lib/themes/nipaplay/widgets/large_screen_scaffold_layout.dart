@@ -89,7 +89,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
 
   int get _menuItemCount {
     final int actionCount = [
-      globals.isTelevision ? null : widget.onToggleLargeScreen,
+      globals.isTvOS ? null : widget.onToggleLargeScreen,
       widget.onToggleThemeFromOrigin,
       widget.onOpenSettings,
     ].where((callback) => callback != null).length;
@@ -581,6 +581,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
   Timer? _stickYRepeatTimer;
 
   void _initGamepadListener() {
+    if (!globals.supportsGamepadInput) return;
     _gamepadSubscription = Gamepad.instance.events.listen(_onGamepadEvent);
   }
 
@@ -1219,7 +1220,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
                 },
                 onTabActivated: _closeTabPanel,
                 onToggleLargeScreen:
-                    globals.isTelevision ? null : widget.onToggleLargeScreen,
+                    globals.isTvOS ? null : widget.onToggleLargeScreen,
                 onToggleThemeFromOrigin: widget.onToggleThemeFromOrigin,
                 onOpenSettings: _toggleSettingsPanel,
               ),

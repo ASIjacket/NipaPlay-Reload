@@ -18,7 +18,7 @@ void main() {
     expect(File('pubspec_overrides.tvos.yaml').existsSync(), isTrue);
     expect(pubspec, contains('package_info_plus: ^10.2.1'));
     expect(pubspec, contains('wakelock_plus: ^1.7.0'));
-    expect(erikaRef, matches(RegExp(r'^[0-9a-f]{40}$')));
+    expect(erikaRef, 'e1d598d032c69ec53c42fe38d49c1d48503f5a91');
     expect(
       File('.flutter-version-linux').readAsStringSync().trim(),
       '3.47.0-0.3.pre',
@@ -83,7 +83,7 @@ void main() {
     expect(tvOSKeys, containsAll(sharedKeys));
     expect(tvOSOverrides, isNot(contains('package_info_plus:')));
     expect(tvOSOverrides, isNot(contains('wakelock_plus:')));
-    expect(tvOSErikaRef, 'v0.1.5');
+    expect(tvOSErikaRef, 'v0.1.6');
     expect(tvOSErikaRef, isNot(sharedErikaRef));
     expect(wrapper, contains('configure_flutter_dependencies.dart" tvos'));
     expect(workflow, contains('configure_flutter_dependencies.dart tvos'));

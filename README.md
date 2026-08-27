@@ -17,7 +17,7 @@
 
 <br>
 
-<img src="https://api.star-history.com/svg?repos=aimessoft/nipaplay-reload&type=Date&theme=moebooru" alt="Star History Chart" width="80%">
+<img src="https://star-history.dera.page/svg?repos=aimessoft/nipaplay-reload&type=Date&theme=moebooru" alt="Star History Chart" width="80%">
 </div>
 
 <div align="center">
@@ -123,9 +123,20 @@ brew tap AimesSoft/nipaplay-reload
 brew install --cask nipaplay-reload
 ```
 
+#### Arch Linux (AUR)
+
+从 AUR 下载 二进制包 [`nipaplay-reload-bin`](https://aur.archlinux.org/packages/nipaplay-reload-bin) 或源码包 [`nipaplay-reload`](https://aur.archlinux.org/packages/nipaplay-reload)：
+
+```bash
+yay -S nipaplay-reload-bin
+```
+或
+```bash
+yay -S nipaplay-reload
+```
 
 > **⚠️ 安全警告**
-> Arch Linux AUR 中的 `nipaplay-reload-bin` 和 `misuzu-music-bin` 包已被恶意用户接管，**请勿安装**。如需在 Arch Linux 上使用，请从 GitHub Releases 下载。
+> Arch Linux AUR 中的 `misuzu-music-bin` 包已被恶意用户接管，**请勿安装**。
 
 #### Gentoo Linux
 
@@ -137,7 +148,7 @@ ebuild gentoo/media-video/nipaplay-bin/nipaplay-bin-1.8.11.ebuild merge
 
 ### 播放体验
 
-* **内核支持**：自研 [Erika](https://github.com/AimesSoft/Erika) 内核（Rust，按平台使用 Metal、D3D11、WGPU 或 Vulkan）、FVP (libmdk)、Media Kit、Video Player、libmpv，多内核可切换。Erika 的可用性和 HDR/硬解能力因平台而异，详见 [平台矩阵](Documentation/platform-matrix.md) 与 [播放器内核说明](Documentation/player-kernels.md)。
+* **内核支持**：自研 [Erika](https://github.com/AimesSoft/Erika) 内核（Rust，按平台使用 Metal、D3D11、WGPU 或 Vulkan）、FVP (libmdk)、Media Kit（libmpv）和 Video Player。详见 [平台矩阵](Documentation/platform-matrix.md) 与 [播放器内核说明](Documentation/player-kernels.md)。
 * **视频支持**：本地播放、Emby/Jellyfin/SMB 流媒体、WebDAV 挂载。
 * **画质增强**：支持 Anime4K 超分、CRT 着色器效果。
 * **音频控制**：多音轨切换、倍速播放。
@@ -180,7 +191,7 @@ ebuild gentoo/media-video/nipaplay-bin/nipaplay-bin-1.8.11.ebuild merge
 | 类别 | 技术/库 |
 | :--- | :--- |
 | **核心框架** | Flutter, Dart |
-| **播放引擎** | Erika (自研, Rust/Metal), FVP, Media Kit, libmpv |
+| **播放引擎** | Erika（自研 Rust）、FVP（MDK）、Media Kit（libmpv）、Video Player |
 | **UI/UX** | Material Design, Glassmorphism, Hugeicons |
 | **状态管理** | Provider |
 | **数据存储** | SQLite, SharedPreferences |
@@ -217,7 +228,7 @@ ebuild gentoo/media-video/nipaplay-bin/nipaplay-bin-1.8.11.ebuild merge
 ### 鸣谢
 
 感谢以下贡献者和支持者：
-EmoSakura, Mr.果仁, 姬田诗乃, 微光, 大祥老师, 卡拜, JMT, 无之将, 博易伯伯, 千葉あおい, Kean, SKYWOW, 爱跑步的男孩, Bassman
+EmoSakura, Mr.果仁, 姬田诗乃, 微光, 大祥老师, 卡拜, JMT, 无之将, 博易伯伯, 千葉あおい, Kean, SKYWOW, 爱跑步的男孩, Bassman, 银蓝_Yl, 小石絹代
 
 ### 看板娘 
 

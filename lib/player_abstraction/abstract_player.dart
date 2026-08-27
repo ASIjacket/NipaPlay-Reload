@@ -3,6 +3,11 @@ import 'package:flutter/foundation.dart'; // For ValueListenable
 import './player_enums.dart';
 import './player_data_models.dart';
 
+/// Maximum number of open attempts for a remote media source, including the
+/// initial open. Slow or sleeping remote disks therefore get four transparent
+/// retries after the first attempt.
+const int networkMediaLoadMaxAttempts = 5;
+
 /// Optional capability for backends whose native teardown must be awaited.
 abstract interface class AsyncDisposablePlayer {
   Future<void> disposeAsync();
@@ -12,6 +17,12 @@ abstract interface class AsyncDisposablePlayer {
 /// asynchronously across a platform bridge.
 abstract interface class AsyncSeekPlayer {
   Future<void> seekAndWait({required int position});
+}
+
+/// Optional capability for backends whose external subtitle replacement is
+/// completed through an asynchronous platform bridge.
+abstract interface class AsyncExternalSubtitlePlayer {
+  Future<void> setExternalSubtitleAsync(String path);
 }
 
 /// Optional capability for backends that can distinguish an accepted play
@@ -25,8 +36,8 @@ abstract interface class MediaLoadAwarePlayer {
   Future<bool> waitUntilMediaReady({required Duration timeout});
 
   /// Retries the current source only when doing so is safe and useful.
-  /// Returns false when the source/error is not retryable or a retry was
-  /// already attempted.
+  /// Returns false when the source/error is not retryable or the retry budget
+  /// has been exhausted.
   Future<bool> retryCurrentMediaLoad();
 }
 

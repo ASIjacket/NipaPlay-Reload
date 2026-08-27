@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.11.4
+version: 1.11.6
 
 environment:
   sdk: ^3.5.3
@@ -109,7 +109,10 @@ dependencies:
     path: packages/wakelock_plus_ohos
   screen_brightness: ^2.1.3
   volume_controller: ^3.4.0
-  universal_gamepad: ^1.5.8
+  universal_gamepad:
+    git:
+      url: https://github.com/makabaka11/universal_gamepad.git
+      ref: main
   sqflite: ^2.3.2
   sqflite_tvos:
     git:
@@ -132,7 +135,7 @@ dependencies:
   erika_flutter:
     git:
       url: https://github.com/AimesSoft/Erika.git
-      ref: 9285a1fe556ffacb490481acfb1195005f1886d9
+      ref: e1d598d032c69ec53c42fe38d49c1d48503f5a91
       path: packages/erika_flutter
   qr_flutter: ^4.1.0  # 用于生成二维码
   mobile_scanner: ^7.2.0
@@ -169,6 +172,9 @@ dependencies:
   # Used on existing platforms. HarmonyOS uses the repository-owned QuickJS
   # FFI bridge because flutter_js has no OHOS implementation.
   flutter_js: ^0.8.0
+  # Optional plugin danmaku renderer host (enabled only on Android/iOS).
+  # 4.14+ requires Dart >=3.10 which the HarmonyOS fork (3.35.8, Dart 3.9.2) cannot resolve.
+  webview_flutter: ^4.13.1
   audioplayers: ^6.1.0
 
 dev_dependencies:

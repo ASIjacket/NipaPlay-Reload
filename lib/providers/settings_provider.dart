@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nipaplay/constants/settings_keys.dart';
+import 'package:nipaplay/constants/media_extensions.dart';
 import 'package:nipaplay/l10n/app_locale_utils.dart';
 import 'package:nipaplay/models/danmaku_auto_load_strategy.dart';
+import 'package:nipaplay/utils/external_player_utils.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 
 class SettingsProvider with ChangeNotifier {
@@ -18,15 +20,15 @@ class SettingsProvider with ChangeNotifier {
   // 哈希匹配失败后自动选择搜索第一个结果（避免弹窗）
   bool _autoMatchDanmakuFirstSearchResultOnHashFail = true; // 默认开启
 
-  // 播放时自动匹配弹幕
-  bool _autoMatchDanmakuOnPlay = true; // 默认开启
   DanmakuAutoLoadStrategy _danmakuAutoLoadStrategy =
       DanmakuAutoLoadStrategy.remoteAndLocal;
+  bool _skipDanmakuMatching = false;
   bool _fastPlaybackStartup = false;
 
   // 外部播放器设置
   bool _useExternalPlayer = false;
   String _externalPlayerPath = '';
+  ExternalPlayerType _externalPlayerType = ExternalPlayerType.unset;
   bool _externalPlayerDanmakuOverlay = true; // 弹幕外挂默认开启
   bool _externalPlayerAutoSwitchToDanmakuConsole = true;
   bool _externalPlayerShrinkWindow = false;
@@ -36,7 +38,7 @@ class SettingsProvider with ChangeNotifier {
   String _githubProxyUrl = '';
 
   // 弹幕超采样设置：0.0=关闭, 1.5=1.5x, 2.0=2x
-  double _danmakuSupersample = 2.0; // 默认值在 _loadSettings 中根据设备类型决定
+  double _danmakuSupersample = 0.0;
 
   // --- Getters ---
   double get blurPower => _blurPower;
@@ -44,12 +46,13 @@ class SettingsProvider with ChangeNotifier {
   bool get danmakuConvertToSimplified => _danmakuConvertToSimplified;
   bool get autoMatchDanmakuFirstSearchResultOnHashFail =>
       _autoMatchDanmakuFirstSearchResultOnHashFail;
-  bool get autoMatchDanmakuOnPlay => _autoMatchDanmakuOnPlay;
   DanmakuAutoLoadStrategy get danmakuAutoLoadStrategy =>
       _danmakuAutoLoadStrategy;
+  bool get skipDanmakuMatching => _skipDanmakuMatching;
   bool get fastPlaybackStartup => _fastPlaybackStartup;
   bool get useExternalPlayer => _useExternalPlayer;
   String get externalPlayerPath => _externalPlayerPath;
+  ExternalPlayerType get externalPlayerType => _externalPlayerType;
   bool get externalPlayerDanmakuOverlay => _externalPlayerDanmakuOverlay;
   bool get externalPlayerAutoSwitchToDanmakuConsole =>
       _externalPlayerAutoSwitchToDanmakuConsole;
@@ -59,6 +62,10 @@ class SettingsProvider with ChangeNotifier {
   double get danmakuSupersample => _danmakuSupersample;
 
   SettingsProvider() {
+    // SharedPreferences loads asynchronously. Expose the correct platform
+    // default immediately so iPad does not create a transient 2x texture and
+    // rebuild it at 1.5x moments later during player startup.
+    _danmakuSupersample = _defaultDanmakuSupersample();
     _loadSettings();
   }
 
@@ -85,25 +92,50 @@ class SettingsProvider with ChangeNotifier {
     _autoMatchDanmakuFirstSearchResultOnHashFail = _prefs.getBool(
             SettingsKeys.autoMatchDanmakuFirstSearchResultOnHashFail) ??
         true;
-    final savedAutoMatchDanmakuOnPlay =
-        _prefs.getBool(SettingsKeys.autoMatchDanmakuOnPlay);
-    _autoMatchDanmakuOnPlay = savedAutoMatchDanmakuOnPlay ?? true;
-    _danmakuAutoLoadStrategy = danmakuAutoLoadStrategyFromPrefs(
-      _prefs.getString(SettingsKeys.danmakuAutoLoadStrategy),
-      legacyAutoMatchOnPlay: _autoMatchDanmakuOnPlay,
+    final persistedStrategy =
+        _prefs.getString(SettingsKeys.danmakuAutoLoadStrategy);
+    final danmakuAutoLoadSettings = resolveDanmakuAutoLoadSettings(
+      persistedStrategy: persistedStrategy,
+      persistedSkipMatching: _prefs.getBool(SettingsKeys.skipDanmakuMatching),
+      legacyAutoMatchOnPlay:
+          _prefs.getBool(SettingsKeys.autoMatchDanmakuOnPlay),
     );
+    _danmakuAutoLoadStrategy = danmakuAutoLoadSettings.strategy;
+    _skipDanmakuMatching = danmakuAutoLoadSettings.skipMatching;
     _fastPlaybackStartup =
         _prefs.getBool(SettingsKeys.fastPlaybackStartup) ?? false;
-    if (!_prefs.containsKey(SettingsKeys.danmakuAutoLoadStrategy)) {
+    if (persistedStrategy != _danmakuAutoLoadStrategy.prefsValue) {
       await _prefs.setString(
         SettingsKeys.danmakuAutoLoadStrategy,
         _danmakuAutoLoadStrategy.prefsValue,
+      );
+    }
+    if (!_prefs.containsKey(SettingsKeys.skipDanmakuMatching)) {
+      await _prefs.setBool(
+        SettingsKeys.skipDanmakuMatching,
+        _skipDanmakuMatching,
       );
     }
     _useExternalPlayer =
         _prefs.getBool(SettingsKeys.useExternalPlayer) ?? false;
     _externalPlayerPath =
         _prefs.getString(SettingsKeys.externalPlayerPath) ?? '';
+    final savedExternalPlayerType =
+        _prefs.getString(SettingsKeys.externalPlayerType);
+    if (savedExternalPlayerType == null) {
+      _externalPlayerType = _externalPlayerPath.isEmpty
+          ? ExternalPlayerType.unset
+          : detectExternalPlayerType(_externalPlayerPath);
+      await _prefs.setString(
+        SettingsKeys.externalPlayerType,
+        _externalPlayerType.name,
+      );
+    } else {
+      _externalPlayerType = ExternalPlayerType.values.firstWhere(
+        (type) => type.name == savedExternalPlayerType,
+        orElse: () => ExternalPlayerType.unset,
+      );
+    }
     _externalPlayerDanmakuOverlay =
         _prefs.getBool(SettingsKeys.externalPlayerDanmakuOverlay) ?? true;
     _externalPlayerAutoSwitchToDanmakuConsole =
@@ -114,13 +146,10 @@ class SettingsProvider with ChangeNotifier {
     _externalPlayerConsoleWindowMode =
         _prefs.getBool(SettingsKeys.externalPlayerConsoleWindowMode) ?? false;
     _githubProxyUrl = _prefs.getString(SettingsKeys.githubProxyUrl) ?? '';
-    // 弹幕超采样：默认对平板和低 DPR 桌面设备开启 2x
-    final defaultSupersample =
-        globals.isTablet || (globals.isDesktop && _defaultDprBelow2())
-            ? 2.0
-            : 0.0;
-    _danmakuSupersample =
-        _prefs.getDouble(SettingsKeys.danmakuSupersample) ?? defaultSupersample;
+    // 弹幕超采样：iPad 默认 1.5x；其他平板和低 DPR 桌面设备维持 2x。
+    // 已保存过设置的用户继续使用其现有值，仅影响首次默认值。
+    _danmakuSupersample = _prefs.getDouble(SettingsKeys.danmakuSupersample) ??
+        _defaultDanmakuSupersample();
     notifyListeners();
   }
 
@@ -135,6 +164,16 @@ class SettingsProvider with ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  static double _defaultDanmakuSupersample() {
+    if (globals.isIPad) {
+      return 1.5;
+    }
+    if (globals.isTablet || (globals.isDesktop && _defaultDprBelow2())) {
+      return 2.0;
+    }
+    return 0.0;
   }
 
   /// Toggles the background blur effect.
@@ -172,15 +211,14 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setAutoMatchDanmakuOnPlay(bool enable) async {
-    _autoMatchDanmakuOnPlay = enable;
-    _danmakuAutoLoadStrategy = enable
-        ? DanmakuAutoLoadStrategy.remoteAndLocal
-        : DanmakuAutoLoadStrategy.manual;
-    await _prefs.setBool(
-      SettingsKeys.autoMatchDanmakuOnPlay,
-      _autoMatchDanmakuOnPlay,
-    );
+  Future<void> setDanmakuAutoLoadStrategy(
+      DanmakuAutoLoadStrategy strategy) async {
+    if (strategy == DanmakuAutoLoadStrategy.manual) {
+      await setSkipDanmakuMatching(true);
+      return;
+    }
+    if (_danmakuAutoLoadStrategy == strategy) return;
+    _danmakuAutoLoadStrategy = strategy;
     await _prefs.setString(
       SettingsKeys.danmakuAutoLoadStrategy,
       _danmakuAutoLoadStrategy.prefsValue,
@@ -188,20 +226,10 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setDanmakuAutoLoadStrategy(
-      DanmakuAutoLoadStrategy strategy) async {
-    if (_danmakuAutoLoadStrategy == strategy) return;
-    _danmakuAutoLoadStrategy = strategy;
-    _autoMatchDanmakuOnPlay = strategy == DanmakuAutoLoadStrategy.remote ||
-        strategy == DanmakuAutoLoadStrategy.remoteAndLocal;
-    await _prefs.setString(
-      SettingsKeys.danmakuAutoLoadStrategy,
-      _danmakuAutoLoadStrategy.prefsValue,
-    );
-    await _prefs.setBool(
-      SettingsKeys.autoMatchDanmakuOnPlay,
-      _autoMatchDanmakuOnPlay,
-    );
+  Future<void> setSkipDanmakuMatching(bool skip) async {
+    if (_skipDanmakuMatching == skip) return;
+    _skipDanmakuMatching = skip;
+    await _prefs.setBool(SettingsKeys.skipDanmakuMatching, skip);
     notifyListeners();
   }
 
@@ -227,6 +255,13 @@ class SettingsProvider with ChangeNotifier {
       SettingsKeys.externalPlayerPath,
       _externalPlayerPath,
     );
+    notifyListeners();
+  }
+
+  Future<void> setExternalPlayerType(ExternalPlayerType type) async {
+    if (_externalPlayerType == type) return;
+    _externalPlayerType = type;
+    await _prefs.setString(SettingsKeys.externalPlayerType, type.name);
     notifyListeners();
   }
 

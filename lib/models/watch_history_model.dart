@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' as io;
 import 'package:path/path.dart' as path;
 import 'dart:convert';
@@ -6,6 +7,7 @@ import 'watch_history_database.dart'; // 添加引入数据库类
 import 'package:nipaplay/utils/storage_service.dart';
 import 'package:nipaplay/services/auto_sync_service.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
+import 'package:nipaplay/utils/media_identity_resolver.dart';
 
 class WatchHistoryItem {
   String filePath;
@@ -20,6 +22,7 @@ class WatchHistoryItem {
   String? thumbnailPath;
   bool isFromScan;
   String? videoHash; // 添加视频哈希值字段，用于弹幕匹配
+  String? mediaKey;
   bool get isDandanplayRemote {
     final normalized = filePath.toLowerCase();
     return normalized.startsWith('dandanplay://') ||
@@ -39,6 +42,7 @@ class WatchHistoryItem {
     this.thumbnailPath,
     this.isFromScan = false,
     this.videoHash,  // 添加哈希值参数
+    this.mediaKey,
   });
 
   Map<String, dynamic> toJson() {
@@ -55,6 +59,7 @@ class WatchHistoryItem {
       'thumbnailPath': thumbnailPath,
       'isFromScan': isFromScan,
       'videoHash': videoHash, // 添加视频哈希值
+      'mediaKey': mediaKey,
     };
   }
 
@@ -74,6 +79,7 @@ class WatchHistoryItem {
       thumbnailPath: json['thumbnailPath'],
       isFromScan: json['isFromScan'] ?? false,
       videoHash: json['videoHash'], // 添加视频哈希值
+      mediaKey: json['mediaKey']?.toString(),
     );
   }
 
@@ -90,6 +96,7 @@ class WatchHistoryItem {
     String? thumbnailPath,
     bool? isFromScan,
     String? videoHash,
+    String? mediaKey,
   }) {
     return WatchHistoryItem(
       filePath: filePath ?? this.filePath,
@@ -104,6 +111,7 @@ class WatchHistoryItem {
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       isFromScan: isFromScan ?? this.isFromScan,
       videoHash: videoHash ?? this.videoHash,
+      mediaKey: mediaKey ?? this.mediaKey,
     );
   }
 }
@@ -526,17 +534,7 @@ class WatchHistoryManager {
         
         _cachedItems.sort((a, b) => b.lastWatchTime.compareTo(a.lastWatchTime));
         _lastWriteTime = DateTime.now();
-        
-        // 触发自动同步（仅桌面端）
-        if (globals.isDesktop) {
-          Future.microtask(() async {
-            try {
-              await AutoSyncService.instance.manualSync();
-            } catch (e) {
-              debugPrint('自动同步触发失败: $e');
-            }
-          });
-        }
+        _scheduleIncrementalSyncAfterChange();
         
         return;
       } catch (e) {
@@ -589,6 +587,7 @@ class WatchHistoryManager {
 
       await file.writeAsString(jsonString);
       _lastWriteTime = DateTime.now();
+      _scheduleIncrementalSyncAfterChange();
       
       // 验证保存后新文件的大小
       final newFileSize = await file.length();
@@ -693,6 +692,7 @@ class WatchHistoryManager {
         
         // 更新内存缓存，保持同步
         _cachedItems.removeWhere((item) => item.filePath == filePath);
+        _scheduleIncrementalSyncAfterChange();
         return;
       } catch (e) {
         debugPrint('使用数据库删除历史记录失败: $e');
@@ -719,6 +719,7 @@ class WatchHistoryManager {
       final file = io.File(_historyFilePath);
       await file.writeAsString(jsonString);
       _lastWriteTime = DateTime.now();
+      _scheduleIncrementalSyncAfterChange();
     } finally {
       _isWriting = false;
     }
@@ -736,6 +737,7 @@ class WatchHistoryManager {
         
         // 清空内存缓存，保持同步
         _cachedItems.clear();
+        _scheduleIncrementalSyncAfterChange();
         return;
       } catch (e) {
         debugPrint('使用数据库清空历史记录失败: $e');
@@ -752,6 +754,12 @@ class WatchHistoryManager {
       await file.writeAsString('[]'); 
     }
     _lastWriteTime = DateTime.now();
+    _scheduleIncrementalSyncAfterChange();
+  }
+
+  static void _scheduleIncrementalSyncAfterChange() {
+    if (!globals.isDesktop) return;
+    unawaited(AutoSyncService.instance.scheduleSyncAfterLocalChange());
   }
 
   // New method to get history item by animeId and episodeId
@@ -997,7 +1005,14 @@ class WatchHistoryManager {
       // 使用原有的JSON逻辑
       final items = await getAllHistory();
       try {
-        return items.firstWhere((item) => item.filePath == filePath);
+        final mediaKey = MediaIdentityResolver.forPath(filePath);
+        return items.firstWhere(
+          (item) =>
+              item.filePath == filePath ||
+              (item.mediaKey ??
+                      MediaIdentityResolver.forPath(item.filePath)) ==
+                  mediaKey,
+        );
       } catch (e) {
         // 如果在iOS上没找到，尝试使用替代路径
         if (io.Platform.isIOS) {

@@ -230,6 +230,8 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
         return 'ART-CNN C4F16';
       case PlayerUpscalerMode.erikaArtCnnC4F32:
         return 'ART-CNN C4F32';
+      case PlayerUpscalerMode.erikaArtCnnC4F16Ds:
+        return 'ART-CNN C4F16 DS';
     }
   }
 
@@ -241,6 +243,8 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
         return '半精度 ART-CNN，速度优先，推荐日常播放';
       case PlayerUpscalerMode.erikaArtCnnC4F32:
         return '单精度 ART-CNN，画质优先，对 GPU 压力更高';
+      case PlayerUpscalerMode.erikaArtCnnC4F16Ds:
+        return '半精度去噪锐化 ART-CNN，适合压缩痕迹明显的动画视频';
     }
   }
 
@@ -338,13 +342,13 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
             Divider(
                 color: colorScheme.onSurface.withValues(alpha: 0.12),
                 height: 1),
-            if (!kIsWeb && !globals.isTelevision) ...[
+            if (!kIsWeb && !globals.isTvOS) ...[
               AdaptiveSettingsTile.dropdown(
                 title: "播放器内核",
                 subtitle: "选择播放器使用的核心引擎",
                 icon: Ionicons.play_circle_outline,
                 items: [
-                  if (!globals.isTelevision)
+                  if (!globals.isTvOS)
                     DropdownMenuItemData(
                       title: "MDK",
                       value: PlayerKernelType.mdk,
@@ -361,7 +365,7 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
                       description: _getPlayerKernelDescription(
                           PlayerKernelType.videoPlayer),
                     ),
-                    if (!globals.isTelevision)
+                    if (!globals.isTvOS)
                       DropdownMenuItemData(
                         title: "Libmpv",
                         value: PlayerKernelType.mediaKit,

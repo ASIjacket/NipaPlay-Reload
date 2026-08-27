@@ -29,6 +29,16 @@ class _SpoilerAiRequestConfig {
 }
 
 extension VideoPlayerStateDanmaku on VideoPlayerState {
+  double get effectiveNativeDanmakuFontSize =>
+      actualDanmakuFontSize * _danmakuPresentationScale;
+
+  void setDanmakuPresentationScale(double scale) {
+    final normalized = scale.isFinite && scale > 0 ? scale : 1.0;
+    if ((_danmakuPresentationScale - normalized).abs() < 0.0001) return;
+    _danmakuPresentationScale = normalized;
+    _syncErikaDanmakuFontSize();
+  }
+
   // Whether the active player kernel renders danmaku natively (Erika).
   // When true, NipaPlay feeds its merged/filtered danmaku list to the kernel
   // and keeps its own Flutter danmaku overlay empty to avoid drawing twice.
@@ -45,6 +55,22 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
   // Public so the kernel hot-swap path can keep the Flutter overlay disabled.
   bool get isNativeDanmakuActive => _erikaNativeDanmaku;
 
+  /// Reconciles danmaku after the persisted plugin renderer changes. A player
+  /// kernel with native danmaku always keeps ownership; plugin selection only
+  /// becomes effective on playback kernels without native danmaku.
+  void handleDanmakuRendererChanged() {
+    try {
+      if (!player.supportsNativeDanmaku) {
+        _notifyListeners();
+        return;
+      }
+      _syncErikaDanmakuConfig();
+      unawaited(player.loadNativeDanmaku(_danmakuList));
+      danmakuController?.clearDanmaku();
+    } catch (_) {}
+    _notifyListeners();
+  }
+
   // Push the current danmaku display settings down to the native kernel.
   // NipaPlay only does spoiler/block pre-filtering before feeding the list;
   // Erika's DFM+ owns merge, density, stacking and track layout, so the
@@ -60,9 +86,9 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
     unawaited(player.setNativeDanmakuConfig(
       opacity: _danmakuOpacity,
       // actualDanmakuFontSize resolves the "0 = default" sentinel to the same
-      // logical font size used by NipaPlay's DFM+ path; Erika uses the same
-      // default danmaku font and applies surface scale internally.
-      fontSize: actualDanmakuFontSize,
+      // logical font size used by NipaPlay's DFM+ path. The presentation scale
+      // additionally follows compact portrait playback without changing prefs.
+      fontSize: effectiveNativeDanmakuFontSize,
       displayArea: _danmakuDisplayArea,
       mergeDuplicates: _mergeDanmaku,
       allowStacking: _danmakuStacking,
@@ -89,16 +115,16 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
   void _syncErikaDanmakuFontSize() {
     if (!_erikaNativeDanmaku) return;
     unawaited(
-      player.setNativeDanmakuConfig(fontSize: actualDanmakuFontSize),
+      player.setNativeDanmakuConfig(fontSize: effectiveNativeDanmakuFontSize),
     );
   }
 
-  Future<DanmakuAutoLoadStrategy> _resolveDanmakuAutoLoadStrategy() async {
+  Future<DanmakuAutoLoadSettings> _resolveDanmakuAutoLoadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    return danmakuAutoLoadStrategyFromPrefs(
-      prefs.getString(SettingsKeys.danmakuAutoLoadStrategy),
-      legacyAutoMatchOnPlay:
-          prefs.getBool(SettingsKeys.autoMatchDanmakuOnPlay) ?? true,
+    return resolveDanmakuAutoLoadSettings(
+      persistedStrategy: prefs.getString(SettingsKeys.danmakuAutoLoadStrategy),
+      persistedSkipMatching: prefs.getBool(SettingsKeys.skipDanmakuMatching),
+      legacyAutoMatchOnPlay: prefs.getBool(SettingsKeys.autoMatchDanmakuOnPlay),
     );
   }
 
@@ -598,7 +624,11 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
   }
 
   // 更新合并后的弹幕列表
-  void _updateMergedDanmakuList({bool preserveOverlay = false}) {
+  void _updateMergedDanmakuList({
+    bool preserveOverlay = false,
+    Map<String, dynamic>? locallySentDanmaku,
+    bool locallySentTrackEnabled = true,
+  }) {
     final List<Map<String, dynamic>> mergedList = [];
 
     // 合并所有启用的轨道
@@ -670,6 +700,16 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
 
     _danmakuList = filteredList;
     _danmakuListVersion++;
+
+    if (locallySentDanmaku != null) {
+      _locallySentDanmaku = Map<String, dynamic>.unmodifiable(
+        _prepareDanmakuForDisplay(locallySentDanmaku),
+      );
+      _locallySentDanmakuDisplayable =
+          locallySentTrackEnabled && !shouldBlockDanmaku(locallySentDanmaku);
+      _locallySentDanmakuListVersion = _danmakuListVersion;
+      _locallySentDanmakuRevision++;
+    }
 
     if (_erikaNativeDanmaku) {
       // Erika composites danmaku into the video frame natively. Feed it the
@@ -759,8 +799,7 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
           '耗时=${DateTime.now().difference(tCache).inMilliseconds}ms');
       if (cached != null && cached.isNotEmpty) {
         final hasSenderMetadata = cached.any((comment) =>
-            comment is Map &&
-            comment['source']?.toString() == 'dandanplay');
+            comment is Map && comment['source']?.toString() == 'dandanplay');
         if (hasSenderMetadata) {
           raw = cached;
         } else {
@@ -821,7 +860,8 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
       _pluginService?.updateDanmakuData(null);
       debugPrint('[ExtDanmaku] 插件过滤: $beforePlugin → ${parsed.length} 条');
     } else {
-      debugPrint('[ExtDanmaku] 插件未修改 (pluginService=${_pluginService != null})');
+      debugPrint(
+          '[ExtDanmaku] 插件未修改 (pluginService=${_pluginService != null})');
     }
     parsed = parsed.map((item) {
       final source = item['source']?.toString().trim();
@@ -956,13 +996,17 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
     }
 
     final typeText = typeValue?.toString().toLowerCase();
-    switch (typeText)
-    {
-    case 'top'    : return DanmakuMode.top   .code;
-    case 'bottom' : return DanmakuMode.bottom.code;
-    case 'scroll' : return DanmakuMode.scroll.code;
-    case 'right'  : return DanmakuMode.scroll.code;
-    default       : return DanmakuMode.scroll.code;
+    switch (typeText) {
+      case 'top':
+        return DanmakuMode.top.code;
+      case 'bottom':
+        return DanmakuMode.bottom.code;
+      case 'scroll':
+        return DanmakuMode.scroll.code;
+      case 'right':
+        return DanmakuMode.scroll.code;
+      default:
+        return DanmakuMode.scroll.code;
     }
   }
 
@@ -1511,6 +1555,14 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
       }
 
       if (historyForRemoteSync != null) {
+        // Provider-backed writes already notify the incremental sync service.
+        // Cover the direct database fallback here without resetting the same
+        // trailing debounce twice for normal playback updates.
+        if (globals.isDesktop && watchHistoryProvider == null) {
+          unawaited(
+            AutoSyncService.instance.scheduleSyncAfterLocalChange(),
+          );
+        }
         await _syncWebRemoteHistoryIfNeeded(
           historyForRemoteSync,
           force: forceRemoteSync,
@@ -1617,7 +1669,11 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
       _danmakuTracks[trackId]!['count'] = trackDanmaku.length;
 
       // 重新计算合并后的弹幕列表
-      _updateMergedDanmakuList(preserveOverlay: true);
+      _updateMergedDanmakuList(
+        preserveOverlay: true,
+        locallySentDanmaku: localDanmaku,
+        locallySentTrackEnabled: _danmakuTrackEnabled[trackId] == true,
+      );
 
       debugPrint('已将新弹幕添加到轨道 "$trackName": ${localDanmaku['content']}');
     }

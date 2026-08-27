@@ -29,10 +29,14 @@ import 'dart:convert';
 import 'package:nipaplay/services/dandanplay_service.dart';
 import 'package:nipaplay/services/bangumi_service.dart';
 import 'package:nipaplay/services/manual_danmaku_matcher.dart';
-import 'package:nipaplay/services/auto_sync_service.dart'; // 导入自动云同步服务
+import 'package:nipaplay/services/auto_sync_service.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/emby_media_source_selection.dart';
+import 'package:nipaplay/services/emby_media_preference_store.dart';
+import 'package:nipaplay/services/emby_media_selection_resolver.dart';
+import 'package:nipaplay/services/emby_player_menu_selection.dart';
+import 'package:nipaplay/services/emby_track_application.dart';
 import 'package:nipaplay/services/subtitle_service.dart';
 import 'package:nipaplay/services/webdav_service.dart';
 import 'package:nipaplay/services/jellyfin_playback_sync_service.dart';
@@ -49,13 +53,16 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
 import 'package:nipaplay/models/danmaku_auto_load_strategy.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
+import 'package:nipaplay/models/emby_media_selection.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/models/playback_detail_context.dart';
+import 'package:nipaplay/utils/media_identity_resolver.dart';
 import 'package:nipaplay/models/watch_history_database.dart'; // 导入观看记录数据库
 import 'package:image/image.dart' as img;
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/plugins/plugin_service.dart';
+import 'package:nipaplay/plugins/danmaku/titan_danmaku_settings.dart';
 
 import 'package:path_provider/path_provider.dart' as path_provider;
 import 'package:nipaplay/utils/ios_container_path_fixer.dart';
@@ -113,6 +120,13 @@ part 'video_player_state/video_player_state_streaming.dart';
 part 'video_player_state/video_player_state_navigation.dart';
 part 'video_player_state/video_player_state_lifecycle.dart';
 part 'video_player_state/video_player_state_chapters.dart';
+
+String _redactMediaUrlForLog(Object? value) {
+  final text = value?.toString() ?? 'null';
+  final uri = Uri.tryParse(text);
+  if (uri == null || uri.userInfo.isEmpty) return text;
+  return uri.replace(userInfo: '').toString();
+}
 
 enum SubtitleStyleOverrideMode { auto, none, scale, force }
 
@@ -292,6 +306,8 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   String? _currentVideoPath;
   String? _currentActualPlayUrl; // 存储实际播放URL，用于判断转码状态
   PlaybackSession? _currentPlaybackSession;
+  EmbyResolvedTrackBundle? _currentEmbyTrackSelection;
+  String? _currentEmbyAccountKey;
   int _lastPlaybackStartMs = 0; // 播放开始时间（用于流媒体缓冲期容错）
   static const int _streamingInvalidDataGraceMs = 8000; // 流媒体无效时长容错期
   final Map<String, int?> _jellyfinServerSubtitleSelections = {};
@@ -340,6 +356,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   bool _isControlsHovered = false;
   bool _controlsVisibilityLocked = false;
   bool _isSeeking = false;
+  int _seekRevision = 0;
   int _mdkNearEndLastPositionMs = -1;
   int _mdkNearEndStalledSinceMs = 0;
   final FocusNode _focusNode = FocusNode();
@@ -366,6 +383,10 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
       AutoNextEpisodeService.defaultCountdownSeconds;
   List<Map<String, dynamic>> _danmakuList = [];
   int _danmakuListVersion = 0;
+  int _locallySentDanmakuRevision = 0;
+  int _locallySentDanmakuListVersion = -1;
+  Map<String, dynamic>? _locallySentDanmaku;
+  bool _locallySentDanmakuDisplayable = false;
 
   // 多轨道弹幕系统
   final Map<String, Map<String, dynamic>> _danmakuTracks = {};
@@ -484,6 +505,8 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
 
   // 弹幕字体大小设置
   double _danmakuFontSize = 0.0; // 默认为0表示使用系统默认值
+  // 当前播放布局的临时字号比例，不写入用户设置。
+  double _danmakuPresentationScale = 1.0;
   Timer? _danmakuFontSizePersistenceTimer;
   String _danmakuFontFilePath = '';
   String _danmakuFontFamily = '';
@@ -493,9 +516,11 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   DanmakuShadowStyle _danmakuShadowStyle = globals.isMobilePlatform
       ? DanmakuShadowStyle.none
       : DanmakuShadowStyle.strong;
-  double _next2DanmakuOutlineWidth = globals.isTelevision
+  double _next2DanmakuOutlineWidth = globals.isTvOS
       ? defaultTvOSErikaDanmakuOutlineWidthLevel
       : defaultDanmakuOutlineWidthLevel;
+  TitanDanmakuSettings _titanDanmakuSettings = const TitanDanmakuSettings();
+  Timer? _titanDanmakuSettingsPersistenceTimer;
   static const double minSubtitleScale = 0.5;
   static const double maxSubtitleScale = 2.5;
   static const double defaultSubtitleScale = 1.0;
@@ -614,6 +639,8 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   int? _animeId; // 存储从 historyItem 传入的 animeId
   WatchHistoryItem? _initialHistoryItem; // 记录首次传入的历史记录，便于初始化时复用元数据
   PlaybackDetailContext? _playbackDetailContext;
+  String? _currentMediaKey;
+  final PlaybackPlaylistCache _playbackPlaylistCache = PlaybackPlaylistCache();
 
   // 字幕管理器
   late SubtitleManager _subtitleManager;
@@ -720,6 +747,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
 
   // 新增回调：当发生严重播放错误且应弹出时调用
   Function()? onSeriousPlaybackErrorAndShouldPop;
+  bool _playbackErrorDialogRequested = false;
 
   // 获取菜单栏隐藏状态
   bool get isAppBarHidden => _isAppBarHidden;
@@ -778,6 +806,36 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
       await prefs.setDouble(SettingsKeys.danmakuFontSize, fontSize);
     } catch (e) {
       debugPrint('[VideoPlayerState] 保存弹幕字号失败: $e');
+    }
+  }
+
+  void _scheduleTitanDanmakuSettingsPersistence({bool immediate = false}) {
+    _titanDanmakuSettingsPersistenceTimer?.cancel();
+    if (immediate) {
+      _titanDanmakuSettingsPersistenceTimer = null;
+      unawaited(_saveTitanDanmakuSettingsPreference(_titanDanmakuSettings));
+      return;
+    }
+    _titanDanmakuSettingsPersistenceTimer = Timer(
+      const Duration(milliseconds: 250),
+      () {
+        _titanDanmakuSettingsPersistenceTimer = null;
+        unawaited(_saveTitanDanmakuSettingsPreference(_titanDanmakuSettings));
+      },
+    );
+  }
+
+  Future<void> _saveTitanDanmakuSettingsPreference(
+    TitanDanmakuSettings settings,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        SettingsKeys.titanDanmakuSettings,
+        jsonEncode(settings.toJson()),
+      );
+    } catch (e) {
+      debugPrint('[VideoPlayerState] 保存 Titan 弹幕设置失败: $e');
     }
   }
 
@@ -923,6 +981,10 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   ScreenshotSaveTarget get screenshotSaveTarget => _screenshotSaveTarget;
   List<Map<String, dynamic>> get danmakuList => _danmakuList;
   int get danmakuListVersion => _danmakuListVersion;
+  int get locallySentDanmakuRevision => _locallySentDanmakuRevision;
+  int get locallySentDanmakuListVersion => _locallySentDanmakuListVersion;
+  Map<String, dynamic>? get locallySentDanmaku => _locallySentDanmaku;
+  bool get locallySentDanmakuDisplayable => _locallySentDanmakuDisplayable;
   Map<String, Map<String, dynamic>> get danmakuTracks => _danmakuTracks;
   Map<String, bool> get danmakuTrackEnabled => _danmakuTrackEnabled;
   double get controlBarHeight => _controlBarHeight;
@@ -946,6 +1008,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
 
   DanmakuShadowStyle get danmakuShadowStyle => _danmakuShadowStyle;
   double get next2DanmakuOutlineWidth => _next2DanmakuOutlineWidth;
+  TitanDanmakuSettings get titanDanmakuSettings => _titanDanmakuSettings;
   double get subtitleScale => _subtitleScale;
   double get subtitleDelayCustomLimitSeconds {
     final durationSeconds = _duration.inMilliseconds / 1000;
@@ -1286,8 +1349,11 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   List<String> get crtShaderPaths => List.unmodifiable(_crtShaderPaths);
   Duration get videoDuration => _videoDuration;
   String? get currentVideoPath => _currentVideoPath;
+  String? get currentMediaKey => _currentMediaKey;
   String? get currentActualPlayUrl => _currentActualPlayUrl; // 当前实际播放URL
   PlaybackSession? get currentPlaybackSession => _currentPlaybackSession;
+  EmbyResolvedTrackBundle? get currentEmbyTrackSelection =>
+      _currentEmbyTrackSelection;
   String get danmakuOverlayKey => _danmakuOverlayKey; // 弹幕覆盖层的稳定key
   String? get animeTitle => _animeTitle; // 添加动画标题getter
   String? get episodeTitle => _episodeTitle; // 添加集数标题getter
@@ -1448,6 +1514,7 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   double get effectivePlaybackRate =>
       _isSpeedBoostActive ? _speedBoostRate : _playbackRate;
   bool get isSpeedBoostActive => _isSpeedBoostActive;
+  int get seekRevision => _seekRevision;
   double get speedBoostRate => _speedBoostRate;
 
   // 跳过时间的getter
@@ -1461,6 +1528,14 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   @override
   void dispose() {
     _isDisposed = true;
+
+    if (_currentVideoPath != null) {
+      unawaited(
+        AutoSyncService.instance.syncOnPlaybackEnd().catchError((error) {
+          debugPrint('退出播放时增量同步失败: $error');
+        }),
+      );
+    }
 
     // 关闭播放器时立即取消自动续播倒计时，避免倒计时在后台继续运行。
     try {
@@ -1499,23 +1574,12 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
       }
     }
 
-    // 退出视频播放时触发自动云同步
-    if (_currentVideoPath != null) {
-      try {
-        // 使用Future.microtask在下一个事件循环中异步执行，避免dispose中的异步问题
-        Future.microtask(() async {
-          await AutoSyncService.instance.syncOnPlaybackEnd();
-          debugPrint('退出视频时云同步成功');
-        });
-      } catch (e) {
-        debugPrint('退出视频时云同步失败: $e');
-      }
-    }
-
     _scheduleVolumePersistence(immediate: true);
     _volumePersistenceTimer?.cancel();
     _scheduleDanmakuFontSizePersistence(immediate: true);
     _danmakuFontSizePersistenceTimer?.cancel();
+    _scheduleTitanDanmakuSettingsPersistence(immediate: true);
+    _titanDanmakuSettingsPersistenceTimer?.cancel();
     _systemVolumeSubscription?.cancel();
     _systemVolumeSubscription = null;
     _systemVolumeController?.removeListener();

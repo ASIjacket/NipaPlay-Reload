@@ -13,6 +13,8 @@ class SettingsKeys {
 
   static const String danmakuAutoLoadStrategy = 'danmaku_auto_load_strategy';
 
+  static const String skipDanmakuMatching = 'skip_danmaku_matching';
+
   static const String fastPlaybackStartup = 'fast_playback_startup';
 
   // =========================== 外部播放器相关设置 ============================
@@ -20,6 +22,7 @@ class SettingsKeys {
   static const String useExternalPlayer =
       'external_player_enabled'; // 是否启用外部播放器
   static const String externalPlayerPath = 'external_player_path'; // 外部播放器路径
+  static const String externalPlayerType = 'external_player_type'; // 外部播放器类型
   static const String externalPlayerDanmakuOverlay =
       'external_player_danmaku_overlay'; // 外部播放器弹幕外挂开关 (ASS 字幕注入)
   static const String externalPlayerAutoSwitchToDanmakuConsole =
@@ -121,6 +124,10 @@ class SettingsKeys {
   static const String danmakuConvertToSimplified =
       'danmaku_convert_to_simplified'; // 简繁转换设置
   static const String danmakuRenderEngine = 'danmaku_render_engine'; // 渲染引擎设置
+  static const String danmakuPluginRenderer =
+      'danmaku_plugin_renderer'; // 插件弹幕渲染器 selectionId
+  static const String titanDanmakuSettings =
+      'titan_danmaku_settings'; // Titan 插件渲染器独立设置
   static const String legacyDanmakuKernel =
       'danmaku_kernel'; // 内核设置（已废弃，保留用于迁移旧设置）
   static const String showDanmakuDensityChart =
