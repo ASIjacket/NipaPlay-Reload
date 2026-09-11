@@ -1,7 +1,16 @@
 name: Build Windows
 
 on:
+  # 允许在 Actions 页面手动触发，构建单独的 Windows 产物（无需走完整 release 流程）。
+  workflow_dispatch:
+    inputs:
+      portable-only:
+        description: '产物只保留免安装版（跳过安装器和 MSIX）'
+        type: boolean
+        default: true
   workflow_call:
+    # 这里刻意不暴露 portable-only：release 需要安装器和 MSIX。未定义的 input
+    # 在被调用时求值为空，下面的条件自然走完整产物分支。
     outputs:
       version:
         description: '应用版本号'
@@ -52,13 +61,29 @@ jobs:
       - name: Clean flutter pub cache
         run: flutter pub cache clean
       
+      # 手动构建：只要能直接运行的那份。这里传的是免安装目录本身而不是它的 zip，
+      # artifact 下载下来本身就是 zip，再套一层就得解压两次才能跑。
+      - name: Upload portable Windows build
+        if: inputs.portable-only
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-Windows-x64
+          path: build/windows/NipaPlay_*_Windows_x64/
+          if-no-files-found: error
+
+      # release 流程：三个发布物都要。注意不能传 build/windows/*，那样会连完整
+      # 构建树 x64/ 和免安装目录一起打包，artifact 会涨到 1.2 GB，而 main.yml
+      # 只取顶层的 *.zip / *.exe / *.msix。
       - name: Upload Windows Artifacts
+        if: ${{ !inputs.portable-only }}
         uses: actions/upload-artifact@v4
         with:
           name: release-Windows-x64
           path: |
-            build/windows/*
-            !build/windows/symbols-windows
+            build/windows/*.zip
+            build/windows/*.exe
+            build/windows/*.msix
+          if-no-files-found: error
 
       - name: Upload Dart debug symbols (for de-obfuscating crash stacks)
         uses: actions/upload-artifact@v4
