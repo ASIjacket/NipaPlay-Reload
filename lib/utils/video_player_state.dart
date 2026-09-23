@@ -399,6 +399,8 @@ class VideoPlayerState extends ChangeNotifier implements WindowListener {
   Timer? _uiUpdateTimer; // UI更新定时器（包含位置保存和数据持久化功能）
   // 观看记录节流：记录上一次更新所处的10秒分桶，避免同一时间窗内重复写DB与通知Provider
   int _lastHistoryUpdateBucket = -1;
+  // 上次向 Emby 上报播放进度的时间（墙钟毫秒），用于节流。
+  int _lastEmbyProgressUploadMs = 0;
   // （保留占位，若未来要做更细粒度同步节流可再启用）
   //  新增：Ticker相关字段
   Ticker? _uiUpdateTicker;

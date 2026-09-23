@@ -1469,14 +1469,22 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
           }
         }
 
-        // Emby同步：如果是Emby流媒体，同步播放进度（每秒同步一次）
+        // Emby同步：播放中按墙钟节流上报进度。
+        // 原先用 `_position % 1000 < 100` 抽样，但这里已经过了读库、可能还有
+        // 截图等 await，读到的是 await 结束时的位置：前面一旦超过约 100ms，
+        // 这一桶就静默不传。暂停时本函数每帧都会被调用，又会在整秒附近连发、
+        // 而且带着 IsPaused=false。
         if (isEmbyStream) {
           try {
-            // 每秒同步一次，提供更及时的进度更新
-            if (_position.inMilliseconds % 1000 < 100) {
-              final itemId = _currentVideoPath!.replaceFirst('emby://', '');
-              final syncService = EmbyPlaybackSyncService();
-              await syncService.syncCurrentProgress(_position.inMilliseconds);
+            final nowMs = DateTime.now().millisecondsSinceEpoch;
+            if (shouldUploadEmbyProgress(
+              isPlaying: _status == PlayerStatus.playing,
+              nowMs: nowMs,
+              lastUploadMs: _lastEmbyProgressUploadMs,
+            )) {
+              _lastEmbyProgressUploadMs = nowMs;
+              await EmbyPlaybackSyncService()
+                  .syncCurrentProgress(_position.inMilliseconds);
             }
           } catch (e) {
             debugPrint('Emby播放进度同步失败: $e');

@@ -6,6 +6,59 @@ import '../models/watch_history_model.dart';
 import 'emby_service.dart';
 import 'media_server_transport.dart';
 
+/// Whether an Emby `UserData` block carries progress worth resuming from.
+///
+/// Some Emby servers report an in-progress item with `PlayCount: 0` and no
+/// `LastPlayedDate` at all, e.g. `{PlaybackPositionTicks: 4542870000,
+/// PlayCount: 0, Played: false}` for an episode watched to 31%. Requiring
+/// both fields threw that progress away, so resuming from Emby never worked
+/// on such servers. A positive position is the signal that matters; the old
+/// condition is kept so servers that already worked behave exactly as before.
+@visibleForTesting
+bool hasEmbyResumeProgress(Map<String, dynamic> userData) {
+  final positionTicks = userData['PlaybackPositionTicks'];
+  if (positionTicks is num && positionTicks > 0) return true;
+  final playCount = userData['PlayCount'];
+  return playCount is num &&
+      playCount > 0 &&
+      userData['LastPlayedDate'] != null;
+}
+
+/// Whether the server's resume point should win over the local record.
+///
+/// With a `LastPlayedDate` the newer side wins, as before. Without one the
+/// two sides cannot be ordered in time, so the further position wins: that
+/// picks up progress made on another device, and never rewinds local progress
+/// that failed to reach the server.
+@visibleForTesting
+bool preferEmbyServerResume({
+  required DateTime? serverLastPlayedUtc,
+  required DateTime localLastWatchUtc,
+  required int serverPositionMs,
+  required int localPositionMs,
+}) {
+  if (serverLastPlayedUtc != null) {
+    return serverLastPlayedUtc.isAfter(localLastWatchUtc);
+  }
+  return serverPositionMs > localPositionMs;
+}
+
+/// Whether playback progress should be reported to Emby right now.
+///
+/// Only while actually playing: reportPlaybackPaused covers the paused state,
+/// and a progress report always says `IsPaused: false`. Throttled by wall
+/// clock rather than by the position's millisecond digits, which depended on
+/// how long the preceding awaits happened to take.
+bool shouldUploadEmbyProgress({
+  required bool isPlaying,
+  required int nowMs,
+  required int lastUploadMs,
+  int minIntervalMs = 5000,
+}) {
+  if (!isPlaying) return false;
+  return nowMs - lastUploadMs >= minIntervalMs;
+}
+
 /// Emby播放记录同步服务
 /// 基于Jellyfin同步服务实现，适配Emby API接口差异
 class EmbyPlaybackSyncService {
@@ -38,19 +91,36 @@ class EmbyPlaybackSyncService {
       final serverProgress = await _getServerPlaybackProgress(itemId);
 
       if (serverProgress == null) {
-        debugPrint('[EmbySync] 服务器无播放记录，使用本地记录');
+        // 请求失败和"服务器上没有进度"都会走到这里，前面的日志会说明是哪一种。
+        debugPrint('[EmbySync] 未取得服务器续播进度，使用本地记录');
         return localHistory;
       }
 
       // 2. 冲突处理：比较上次播放时间
-      final serverLastWatchTime =
-          DateTime.parse(serverProgress['LastPlayedDate'] ?? '').toUtc();
+      final lastPlayedRaw = serverProgress['LastPlayedDate'];
+      final serverLastWatchTime = lastPlayedRaw is String
+          ? DateTime.tryParse(lastPlayedRaw)?.toUtc()
+          : null;
       final localLastWatchTime = localHistory.lastWatchTime.toUtc();
+      final serverPositionTicks = serverProgress['PlaybackPositionTicks'];
+      final serverPositionMs = serverPositionTicks is num
+          ? (serverPositionTicks / 10000).round()
+          : 0;
 
-      debugPrint('[EmbySync] 服务器最后观看时间(UTC): $serverLastWatchTime');
+      debugPrint(
+          '[EmbySync] 服务器最后观看时间(UTC): ${serverLastWatchTime ?? '未提供'}');
       debugPrint('[EmbySync] 本地最后观看时间(UTC): $localLastWatchTime');
+      if (serverLastWatchTime == null) {
+        debugPrint('[EmbySync] 服务器未提供LastPlayedDate，按进度比较: '
+            '服务器=${serverPositionMs}ms, 本地=${localHistory.lastPosition}ms');
+      }
 
-      if (serverLastWatchTime.isAfter(localLastWatchTime)) {
+      if (preferEmbyServerResume(
+        serverLastPlayedUtc: serverLastWatchTime,
+        localLastWatchUtc: localLastWatchTime,
+        serverPositionMs: serverPositionMs,
+        localPositionMs: localHistory.lastPosition,
+      )) {
         // 服务器记录更新，使用服务器记录
         debugPrint('[EmbySync] 使用服务器记录（更新）');
         return _createHistoryFromServerProgress(
@@ -219,8 +289,8 @@ class EmbyPlaybackSyncService {
       debugPrint(
           '[EmbySync] 用户数据: playbackPositionTicks=$playbackPositionTicks, playCount=$playCount, lastPlayedDate=$lastPlayedDate');
 
-      if (playCount == 0 || lastPlayedDate == null) {
-        debugPrint('[EmbySync] 项目从未播放过');
+      if (!hasEmbyResumeProgress(Map<String, dynamic>.from(userData))) {
+        debugPrint('[EmbySync] 服务器上没有该项目的续播进度');
         return null;
       }
 
@@ -240,6 +310,7 @@ class EmbyPlaybackSyncService {
   WatchHistoryItem _createHistoryFromServerProgress(String itemId,
       Map<String, dynamic> serverProgress, WatchHistoryItem originalHistory) {
     final positionTicks = serverProgress['PlaybackPositionTicks'] ?? 0;
+    final lastPlayedRaw = serverProgress['LastPlayedDate'];
     // Emby ticks 转换为毫秒：1 tick = 100 nanoseconds = 0.0001 milliseconds
     final positionMs = (positionTicks / 10000).round(); // 转换为毫秒
 
@@ -255,7 +326,10 @@ class EmbyPlaybackSyncService {
       watchProgress: originalHistory.watchProgress, // 保持原有的观看进度
       lastPosition: positionMs, // 使用服务器位置
       duration: originalHistory.duration, // 保持原有的时长
-      lastWatchTime: DateTime.parse(serverProgress['LastPlayedDate']),
+      lastWatchTime: (lastPlayedRaw is String
+              ? DateTime.tryParse(lastPlayedRaw)
+              : null) ??
+          DateTime.now(),
       thumbnailPath: originalHistory.thumbnailPath, // 保持原有的缩略图
     );
   }
@@ -338,6 +412,9 @@ class EmbyPlaybackSyncService {
     if (!_isPlaying ||
         _currentItemId == null ||
         _currentPlaySessionId == null) {
+      // 没上报过播放开始时这里会一直跳过，整场播放的进度都传不上去。
+      debugPrint('[EmbySync] 跳过进度上报：本次播放尚未上报开始 '
+          '(isPlaying=$_isPlaying, session=$_currentPlaySessionId)');
       return;
     }
 

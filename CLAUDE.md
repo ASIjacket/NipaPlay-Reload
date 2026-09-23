@@ -69,9 +69,42 @@ on:
 
 ```bash
 git diff --stat upstream/main..HEAD
-# 期望：只有 .github/workflows/build-windows.yml 一个文件有差异
+# 期望：除 CLAUDE.md 外，只有本条的 build-windows.yml 和第 2 条列出的文件有差异
 python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/build-windows.yml')); print(list(d[True].keys()))"
 # 期望：['workflow_dispatch', 'workflow_call']
+```
+
+---
+
+## 2. Emby 播放进度同步修复
+
+**保留原因**
+
+- 拉取：部分 Emby 服务器（如本仓库用户的）对看到一半的条目返回 `PlayCount: 0` 且
+  **不带** `LastPlayedDate`，上游要求两者都有，服务器进度一律被丢弃。
+- 上报：上游用 `_position % 1000 < 100` 抽样，读到的是 await 之后的位置，前面耗时
+  超过约 100ms 这一轮就静默不传；暂停时又每帧带着 `IsPaused: false` 连发。
+
+**改动内容**
+
+- `lib/services/emby_playback_sync_service.dart`：顶层函数 `hasEmbyResumeProgress`
+  （`PlaybackPositionTicks > 0` 即算有进度）、`preferEmbyServerResume`（有
+  `LastPlayedDate` 比时间，没有则取更靠后的位置，绝不倒退本地进度）、
+  `shouldUploadEmbyProgress`（只在播放中、按墙钟 5 秒节流）；以及几条 `[EmbySync]` 日志。
+- `lib/utils/video_player_state.dart`：字段 `_lastEmbyProgressUploadMs`。
+- `lib/utils/video_player_state/video_player_state_danmaku.dart`：`_updateWatchHistory`
+  里的 Emby 上报块改用 `shouldUploadEmbyProgress`（Jellyfin 块未动）。
+- `lib/utils/video_player_state/video_player_state_player_setup.dart`：恢复
+  `_initializeWatchHistory` 失败时的日志。
+- `test/emby_playback_sync_resume_test.dart`。
+
+**同步后自检**
+
+上游若改动了这些位置，先看上游是否已修好同一问题：修好了就取上游、删掉本条；
+没修就按上面重新应用。然后：
+
+```bash
+flutter test test/emby_playback_sync_resume_test.dart
 ```
 
 ---
@@ -85,3 +118,4 @@ git merge upstream/main
 ```
 
 若 `build-windows.yml` 冲突，以本文件记录的版本为准重新应用，不要直接取上游版本。
+第 2 条涉及的文件冲突时，按第 2 条“同步后自检”处理。

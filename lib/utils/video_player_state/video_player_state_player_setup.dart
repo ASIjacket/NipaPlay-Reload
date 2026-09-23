@@ -1620,8 +1620,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       }
 
       _resolveWatchHistoryProvider()?.refresh();
-    } catch (e) {
-      //debugPrint('初始化观看记录时出错: $e\n$s');
+    } catch (e, s) {
+      // 这里失败会让本次播放既不拉服务器进度、也不上报播放开始，之后的进度
+      // 上报全部被跳过。之前这行日志被注释掉，整个问题完全无迹可寻。
+      debugPrint('初始化观看记录时出错: $e\n$s');
     }
   }
 }
