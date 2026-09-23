@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import './abstract_player.dart';
+import './erika_gif_export.dart';
 import './player_data_models.dart';
 import './player_enums.dart';
 
@@ -504,8 +505,7 @@ class _NipaplayErikaWindowOverlayVideoViewState
         if (visible) {
           _cutoutOwners[onFrameRectChanged] = _cutoutOwner;
           onFrameRectChanged(flutterCutout);
-        } else if (identical(
-            _cutoutOwners[onFrameRectChanged], _cutoutOwner)) {
+        } else if (identical(_cutoutOwners[onFrameRectChanged], _cutoutOwner)) {
           _cutoutOwners[onFrameRectChanged] = null;
           onFrameRectChanged(null);
         }
@@ -576,7 +576,8 @@ class ErikaPlayerAdapter
         AbstractPlayer,
         AsyncDisposablePlayer,
         AsyncSeekPlayer,
-        AsyncExternalSubtitlePlayer {
+        AsyncExternalSubtitlePlayer,
+        GifExportCapablePlayer {
   ErikaPlayerAdapter({
     PlayerErikaAndroidOutputMode androidOutputMode =
         PlayerErikaAndroidOutputMode.sdr,
@@ -670,6 +671,55 @@ class ErikaPlayerAdapter
           defaultTargetPlatform == TargetPlatform.windows ||
           defaultTargetPlatform == TargetPlatform.android ||
           _isHarmonyOS);
+
+  @override
+  bool get supportsGifExport => supportsHeadlessGifExport;
+
+  static bool get supportsHeadlessGifExport => _isSupported;
+
+  @override
+  Future<GifExportResult> exportGif(GifExportRequest request) =>
+      exportGifHeadless(request);
+
+  static Future<GifExportResult> exportGifHeadless(
+    GifExportRequest request,
+  ) async {
+    if (!supportsHeadlessGifExport) {
+      throw UnsupportedError(
+        'Erika GIF export is unavailable on this platform.',
+      );
+    }
+    if (request.start.isNegative || request.end <= request.start) {
+      throw ArgumentError('GIF export end must be later than its start.');
+    }
+    if (request.framesPerSecond < 1 || request.framesPerSecond > 60) {
+      throw ArgumentError('GIF export frame rate must be in 1..=60.');
+    }
+    if (request.outputWidth < 1 ||
+        request.outputWidth > 8192 ||
+        request.outputHeight < 1 ||
+        request.outputHeight > 8192) {
+      throw ArgumentError('GIF export dimensions must be in 1..=8192.');
+    }
+    final exported = await exportGifWithErika(<String, Object?>{
+      'inputUri': request.inputUri,
+      'outputPath': request.outputPath,
+      'startMillis': request.start.inMilliseconds,
+      'endMillis': request.end.inMilliseconds,
+      'framesPerSecond': request.framesPerSecond,
+      'outputWidth': request.outputWidth,
+      'outputHeight': request.outputHeight,
+      'quality': request.quality == GifExportQuality.high ? 1 : 0,
+      if (request.httpHeaders.isNotEmpty) 'httpHeaders': request.httpHeaders,
+    });
+    return GifExportResult(
+      outputPath: exported['outputPath'] as String,
+      width: exported['width'] as int,
+      height: exported['height'] as int,
+      frameCount: exported['frameCount'] as int,
+      fileSize: exported['fileSize'] as int,
+    );
+  }
 
   bool get prefersPlatformVideoSurface => _isSupported;
 

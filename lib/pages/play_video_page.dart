@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:nipaplay/services/auto_next_episode_service.dart';
 import 'package:nipaplay/services/system_share_service.dart';
 import 'package:nipaplay/widgets/airplay_route_picker.dart';
+import 'package:nipaplay/widgets/intro_skip_button.dart';
+import 'package:nipaplay/services/intro_skip/skip_segment.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/video_player_widget.dart';
 import 'package:provider/provider.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -28,6 +30,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_bottom_hint_overlay.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/media_capture_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_player_menu_scope.dart';
@@ -291,7 +294,7 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
     if (!SystemShareService.isSupported) return;
 
     final currentVideoPath = videoState.currentVideoPath;
-    final currentActualUrl = videoState.currentActualPlayUrl;
+    final currentActualUrl = videoState.currentResolvedMediaSource;
 
     String? filePath;
     String? url;
@@ -304,7 +307,7 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
       } else if (scheme == 'jellyfin' || scheme == 'emby') {
         url = currentActualUrl;
       } else if (scheme == 'smb' || scheme == 'webdav' || scheme == 'dav') {
-        url = currentVideoPath;
+        url = currentActualUrl;
       } else {
         filePath = currentVideoPath;
       }
@@ -340,72 +343,30 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
     }
   }
 
-  Future<void> _captureScreenshot(VideoPlayerState videoState) async {
+  Future<void> _captureScreenshot(
+    VideoPlayerState videoState,
+    ScreenshotSaveTarget target, {
+    required bool includeDanmaku,
+    required bool includeSubtitles,
+  }) async {
     if (kIsWeb) return;
     if (!videoState.hasVideo) return;
 
     try {
-      if (Platform.isIOS) {
-        final colorScheme = Theme.of(context).colorScheme;
-        final actionColor = colorScheme.onSurface.withOpacity(0.82);
-        final cancelColor = colorScheme.onSurface.withOpacity(0.58);
-        String? destination;
-        switch (videoState.screenshotSaveTarget) {
-          case ScreenshotSaveTarget.photos:
-            destination = 'photos';
-            break;
-          case ScreenshotSaveTarget.file:
-            destination = 'file';
-            break;
-          case ScreenshotSaveTarget.ask:
-            destination = await BlurDialog.show<String>(
-              context: context,
-              title: '保存截图',
-              content: '请选择保存位置',
-              actions: [
-                HoverScaleTextButton(
-                  onPressed: () => Navigator.of(context).pop('photos'),
-                  child: Text(
-                    '相册',
-                    style: TextStyle(color: actionColor),
-                  ),
-                ),
-                HoverScaleTextButton(
-                  onPressed: () => Navigator.of(context).pop('file'),
-                  child: Text(
-                    '文件',
-                    style: TextStyle(color: actionColor),
-                  ),
-                ),
-                HoverScaleTextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(
-                    '取消',
-                    style: TextStyle(color: cancelColor),
-                  ),
-                ),
-              ],
-              barrierDismissible: !_shouldDisableDialogDismiss(videoState),
-            );
-            break;
-        }
-
+      if (Platform.isIOS && target == ScreenshotSaveTarget.photos) {
+        final ok = await videoState.captureScreenshotToPhotos(
+          includeDanmaku: includeDanmaku,
+          includeSubtitles: includeSubtitles,
+        );
         if (!mounted) return;
-        if (destination == null) return;
-
-        if (destination == 'photos') {
-          final ok = await videoState.captureScreenshotToPhotos();
-          if (!mounted) return;
-          if (ok) {
-            BlurSnackBar.show(context, '截图已保存到相册');
-          } else {
-            BlurSnackBar.show(context, '截图失败');
-          }
-          return;
-        }
+        BlurSnackBar.show(context, ok ? '截图已保存到相册' : '截图失败');
+        return;
       }
 
-      final path = await videoState.captureScreenshot();
+      final path = await videoState.captureScreenshot(
+        includeDanmaku: includeDanmaku,
+        includeSubtitles: includeSubtitles,
+      );
       if (!mounted) return;
       if (path == null || path.isEmpty) {
         BlurSnackBar.show(context, '截图失败');
@@ -416,6 +377,27 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
       if (!mounted) return;
       BlurSnackBar.show(context, '截图失败: $e');
     }
+  }
+
+  void _showMediaCaptureSettings(VideoPlayerState videoState) {
+    unawaited(
+      showMediaCaptureDialog(
+        context: context,
+        videoState: videoState,
+        onCaptureImage: (
+          target, {
+          required includeDanmaku,
+          required includeSubtitles,
+        }) =>
+            _captureScreenshot(
+          videoState,
+          target,
+          includeDanmaku: includeDanmaku,
+          includeSubtitles: includeSubtitles,
+        ),
+        barrierDismissible: !_shouldDisableDialogDismiss(videoState),
+      ),
+    );
   }
 
   bool _shouldDisableDialogDismiss(VideoPlayerState? videoState) {
@@ -951,7 +933,7 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
         (videoState.showControls || (uiLocked && _showUiLockButton));
     final bool showShareButton =
         SystemShareService.isSupported && !globals.isDesktop;
-    final bool showScreenshotButton = !kIsWeb && globals.isMobilePlatform;
+    final bool showScreenshotButton = !kIsWeb;
     final bool showAirPlayButton =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     final detachedWindow = DesktopMultiWindow.maybeControllerOf(context);
@@ -1211,11 +1193,27 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
                               defaultTargetPlatform == TargetPlatform.iOS)
                             const SizedBox(width: 12),
                           ShadowActionButton(
-                            tooltip: '截图',
+                            tooltip: '点击截图，长按打开截取设置',
                             icon: Icons.camera_alt_outlined,
                             onPressed: () {
                               videoState.resetHideControlsTimer();
-                              _captureScreenshot(videoState);
+                              final target = videoState.screenshotSaveTarget;
+                              if (target == ScreenshotSaveTarget.ask) {
+                                _showMediaCaptureSettings(videoState);
+                              } else {
+                                unawaited(_captureScreenshot(
+                                  videoState,
+                                  target,
+                                  includeDanmaku: videoState
+                                      .screenshotCaptureIncludesDanmaku,
+                                  includeSubtitles: videoState
+                                      .screenshotCaptureIncludesSubtitles,
+                                ));
+                              }
+                            },
+                            onLongPress: () {
+                              videoState.resetHideControlsTimer();
+                              _showMediaCaptureSettings(videoState);
                             },
                           ),
                         ],
@@ -1288,6 +1286,29 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
           _buildPictureInPictureControls(videoState)
         else
           VideoControlsOverlay(compactPortrait: portraitUiScale < 0.999),
+        if (!isPictureInPicture)
+          Positioned(
+            right: 16.0 + horizontalCutoutInset,
+            bottom: isCompactPortrait ? 84.0 : 96.0,
+            child: AnimatedOpacity(
+              opacity: videoState.hasActiveSkipSegment && !uiLocked ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 180),
+              child: IgnorePointer(
+                ignoring: !(videoState.hasActiveSkipSegment && !uiLocked),
+                child: IntroSkipButton(
+                  // 片头 / 片尾共用这一个按钮，文案跟着当前命中的区间类型走
+                  label: videoState.activeSkipSegment?.kind ==
+                          SkipSegmentKind.ending
+                      ? '跳过片尾'
+                      : '跳过片头',
+                  onPressed: () {
+                    videoState.resetHideControlsTimer();
+                    unawaited(videoState.skipCurrentSegment());
+                  },
+                ),
+              ),
+            ),
+          ),
         if (uiLocked)
           Positioned.fill(
             child: GestureDetector(

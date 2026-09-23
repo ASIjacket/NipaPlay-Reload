@@ -16,6 +16,32 @@ import '../models/jellyfin_transcode_settings.dart';
 import 'jellyfin_transcode_manager.dart';
 import 'media_server_service_base.dart';
 
+/// 在后台 isolate 里完成 `json.decode` + 逐条 `fromJson`。
+///
+/// 媒体库接口用的是 `Recursive=true&Limit=99999`，响应体可达几十 MB。
+/// 在主 isolate 上解析这种量级的 JSON 会让 UI 整段卡死
+/// （低端电视盒的 A53 上尤其明显），因此把纯 CPU 的解码与建模挪出主线程。
+List<JellyfinMediaItem> _decodeJellyfinItems(String body) {
+  final data = json.decode(body);
+  final List<dynamic> items = data['Items'] ?? const [];
+  return items
+      .map((item) => JellyfinMediaItem.fromJson(item))
+      .toList(growable: true);
+}
+
+/// 小于该长度的响应直接在主 isolate 解析，避免为小请求白付一次 isolate 启动开销。
+const int _kJellyfinInlineDecodeLimit = 64 * 1024;
+
+/// 解析 `/Items` 响应，大响应自动转到后台 isolate。
+Future<List<JellyfinMediaItem>> _decodeJellyfinItemsMaybeIsolated(
+  String body,
+) {
+  if (body.length < _kJellyfinInlineDecodeLimit) {
+    return Future.value(_decodeJellyfinItems(body));
+  }
+  return compute(_decodeJellyfinItems, body);
+}
+
 class JellyfinService extends MediaServerServiceBase
     implements MediaServerPlaybackClient {
   static final JellyfinService instance = JellyfinService._internal();
@@ -39,6 +65,10 @@ class JellyfinService extends MediaServerServiceBase
 
   @override
   String get serviceType => 'jellyfin';
+
+  // Jellyfin 12 disables the legacy X-Emby authorization headers by default.
+  @override
+  String get authorizationHeaderName => 'Authorization';
 
   @override
   String get prefsKeyPrefix => 'jellyfin';
@@ -279,13 +309,12 @@ class JellyfinService extends MediaServerServiceBase
   /// 执行完整的认证流程
   Future<void> _performAuthentication(
       String serverUrl, String username, String password) async {
-    final clientInfo = await getClientInfo();
     final authResponse = await sendRequestFollowingRedirects(
       Uri.parse('$serverUrl/Users/AuthenticateByName'),
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Emby-Authorization': clientInfo,
+        ...await buildAuthorizationHeaders(includeToken: false),
       },
       body: json.encode({
         'Username': username,
@@ -435,11 +464,7 @@ class JellyfinService extends MediaServerServiceBase
       final response = await _makeAuthenticatedRequest('/Items?$queryString');
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List<dynamic> items = data['Items'] ?? [];
-
-        final results =
-            items.map((item) => JellyfinMediaItem.fromJson(item)).toList();
+        final results = await _decodeJellyfinItemsMaybeIsolated(response.body);
 
         results.sort((a, b) {
           if (a.isFolder != b.isFolder) {
@@ -499,10 +524,7 @@ class JellyfinService extends MediaServerServiceBase
           '/Items?ParentId=$libraryId&IncludeItemTypes=$includeItemTypes&Recursive=true&SortBy=$defaultSortBy&SortOrder=$defaultSortOrder&Limit=$limit&userId=$_userId&Fields=Overview,CommunityRating');
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List<dynamic> items = data['Items'];
-
-        return items.map((item) => JellyfinMediaItem.fromJson(item)).toList();
+        return _decodeJellyfinItemsMaybeIsolated(response.body);
       }
     } catch (e) {
       debugPrint('Error fetching media items for library $libraryId: $e');
@@ -604,12 +626,10 @@ class JellyfinService extends MediaServerServiceBase
               '/Items?ParentId=$libraryId&IncludeItemTypes=$includeItemTypes&Recursive=true&SortBy=$defaultSortBy&SortOrder=$defaultSortOrder&Limit=$limit&userId=$_userId');
 
           if (response.statusCode == 200) {
-            final data = json.decode(response.body);
-            final List<dynamic> items = data['Items'];
-
-            List<JellyfinMediaItem> libraryItems =
-                items.map((item) => JellyfinMediaItem.fromJson(item)).toList();
-
+            // Recursive=true&Limit=99999：这里的响应可能是几十 MB，
+            // 解析统一交给后台 isolate，避免阻塞 UI 线程。
+            final libraryItems =
+                await _decodeJellyfinItemsMaybeIsolated(response.body);
             allItems.addAll(libraryItems);
           }
         }
@@ -1274,7 +1294,7 @@ class JellyfinService extends MediaServerServiceBase
       'MediaSourceId': resolvedMediaSourceId,
       if (playSessionId != null && playSessionId.isNotEmpty)
         'PlaySessionId': playSessionId,
-      if (_accessToken != null) 'api_key': _accessToken!,
+      if (_accessToken != null) 'ApiKey': _accessToken!,
     };
     final uri = Uri.parse('$_serverUrl/Videos/$itemId/stream')
         .replace(queryParameters: params);
@@ -1290,7 +1310,7 @@ class JellyfinService extends MediaServerServiceBase
     }
 
     final params = <String, String>{
-      'api_key': _accessToken!,
+      'ApiKey': _accessToken!,
       // HLS master.m3u8 需要 MediaSourceId（大多数情况下与 itemId 相同）
       'MediaSourceId': itemId,
       // 指定分片容器，Jellyfin 默认 HLS TS 更通用
@@ -1327,7 +1347,7 @@ class JellyfinService extends MediaServerServiceBase
     }
 
     final params = <String, String>{
-      'api_key': _accessToken!,
+      'ApiKey': _accessToken!,
       'mediaSourceId': itemId, // 修正参数名
       'segmentContainer': 'ts',
     };
@@ -1592,7 +1612,7 @@ class JellyfinService extends MediaServerServiceBase
             if (isExternal) {
               final mediaSourceId = mediaSource['Id'];
               final subtitleUrl =
-                  '$_serverUrl/Videos/$itemId/$mediaSourceId/Subtitles/$realIndex/Stream.$codec?api_key=$_accessToken';
+                  '$_serverUrl/Videos/$itemId/$mediaSourceId/Subtitles/$realIndex/Stream.$codec?ApiKey=$_accessToken';
               trackInfo['downloadUrl'] = subtitleUrl;
             }
 
@@ -1643,7 +1663,7 @@ class JellyfinService extends MediaServerServiceBase
 
       // 构建字幕下载URL
       final subtitleUrl =
-          '$_serverUrl/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format?api_key=$_accessToken';
+          '$_serverUrl/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format?ApiKey=$_accessToken';
 
       debugPrint(
         'JellyfinService: 下载字幕文件: ${Uri.parse(subtitleUrl).replace(queryParameters: const <String, String>{})}',

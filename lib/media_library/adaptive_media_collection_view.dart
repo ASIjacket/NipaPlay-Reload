@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/cupertino.dart' as cupertino;
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart' as material;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:nipaplay/app/app_display_surface.dart';
 import 'package:nipaplay/app/app_display_surface_scope.dart';
@@ -31,7 +33,363 @@ import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart
 import 'package:nipaplay/themes/nipaplay/widgets/themed_anime_detail.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
 
-enum MediaCollectionSort { recentlyAdded, name }
+enum MediaCollectionSort { comprehensive, recentlyAdded, name }
+
+/// 各媒体库数据源当前选择的排序方式。
+class _LibrarySortPreferenceStore {
+  static const String _keyPrefix = 'library_collection_sort_v1_';
+
+  static Future<MediaCollectionSort?> load(
+    UnifiedMediaLibrarySource source,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('$_keyPrefix${source.name}');
+      for (final sort in MediaCollectionSort.values) {
+        if (sort.name == saved) return sort;
+      }
+    } catch (e) {
+      debugPrint('加载媒体库排序方式失败: $e');
+    }
+    return null;
+  }
+
+  static Future<void> save(
+    UnifiedMediaLibrarySource source,
+    MediaCollectionSort sort,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_keyPrefix${source.name}', sort.name);
+    } catch (e) {
+      debugPrint('保存媒体库排序方式失败: $e');
+    }
+  }
+}
+
+/// 媒体库“新内容”追踪器。
+///
+/// 为每个数据源（本地 / WebDAV / SMB）持久化保存一份基线：
+/// 记录每部番剧已被用户浏览时在库中的集数。
+/// * 基线里不存在的番剧 => 新番剧；
+/// * 当前集数多于基线记录 => 有新集数。
+/// NEW 标识只有在用户点开对应番剧详情后才会消除，并立即更新持久化基线；
+/// 停留浏览或离开媒体库都不会清除，直到用户真正点开该番剧。
+/// 番剧从媒体库消失（文件被移出）时会自动从基线剔除，以后重新出现仍算新内容。
+/// 首次安装 / 升级后首次运行时只静默建立基线、不显示 NEW，避免整个媒体库都被标记。
+class LibraryNewContentTracker {
+  LibraryNewContentTracker._();
+
+  static final LibraryNewContentTracker instance = LibraryNewContentTracker._();
+
+  static const String _baselineKey = 'library_new_content_baseline_v1';
+  static const String _discoveredAtKey =
+      'library_new_content_discovered_v1';
+
+  final Map<String, Map<int, int>> _baselines = {};
+  // 每部番剧当前 NEW 内容的「首次发现时间」（毫秒时间戳）。
+  // 综合排序据此让新内容在发现时排到最前，之后随最近观看时间自然下沉。
+  final Map<String, Map<int, int>> _discoveredAtMillis = {};
+  final Set<String> _loadedSources = <String>{};
+  final Set<String> _initializedSources = <String>{};
+
+  String _sourceKey(UnifiedMediaLibrarySource source) {
+    return switch (source) {
+      UnifiedMediaLibrarySource.local => 'local',
+      UnifiedMediaLibrarySource.webdav => 'webdav',
+      UnifiedMediaLibrarySource.smb => 'smb',
+    };
+  }
+
+  bool isReady(UnifiedMediaLibrarySource source) {
+    return _loadedSources.contains(_sourceKey(source));
+  }
+
+  /// 该数据源是否已完成首次基线建立。
+  bool isInitialized(UnifiedMediaLibrarySource source) {
+    return _initializedSources.contains(_sourceKey(source));
+  }
+
+  Future<void> load(UnifiedMediaLibrarySource source) async {
+    final key = _sourceKey(source);
+    if (_loadedSources.contains(key)) return;
+
+    final baseline = <int, int>{};
+    final discoveredAt = <int, int>{};
+    var initialized = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_baselineKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = json.decode(raw);
+        if (decoded is Map) {
+          final sourceMap = decoded[key];
+          if (sourceMap is Map) {
+            sourceMap.forEach((k, v) {
+              final animeId = int.tryParse('$k');
+              if (animeId != null && v is num && v >= 0) {
+                baseline[animeId] = v.toInt();
+              }
+            });
+          }
+          initialized = decoded['__initialized_$key'] == true;
+        }
+      }
+      final discoveredRaw = prefs.getString(_discoveredAtKey);
+      if (discoveredRaw != null && discoveredRaw.isNotEmpty) {
+        final discoveredDecoded = json.decode(discoveredRaw);
+        if (discoveredDecoded is Map) {
+          final discoveredMap = discoveredDecoded[key];
+          if (discoveredMap is Map) {
+            discoveredMap.forEach((k, v) {
+              final animeId = int.tryParse('$k');
+              if (animeId != null && v is num && v > 0) {
+                discoveredAt[animeId] = v.toInt();
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('加载媒体库新内容基线失败: $e');
+    }
+
+    _baselines[key] = baseline;
+    _discoveredAtMillis[key] = discoveredAt;
+    _loadedSources.add(key);
+    if (initialized) _initializedSources.add(key);
+  }
+
+  /// 判断某部番剧是否为新番剧或包含新集数。
+  bool hasNewContent(
+    UnifiedMediaLibrarySource source,
+    int animeId,
+    int currentEpisodeCount,
+  ) {
+    if (currentEpisodeCount <= 0) return false;
+    final key = _sourceKey(source);
+    if (!_loadedSources.contains(key) || !_initializedSources.contains(key)) {
+      return false;
+    }
+    final previous = _baselines[key]?[animeId];
+    return previous == null || currentEpisodeCount > previous;
+  }
+
+  /// 返回某部番剧当前 NEW 内容的首次发现时间（毫秒时间戳）；无记录返回 null。
+  int? discoveredAt(UnifiedMediaLibrarySource source, int animeId) {
+    return _discoveredAtMillis[_sourceKey(source)]?[animeId];
+  }
+
+  /// 记录 NEW 内容的首次发现时间；已有记录时不覆盖，
+  /// 保证番剧只在真正首次发现时跳到最前，之后随时间自然下沉。
+  /// 返回是否新增了记录（调用方据此决定是否持久化）。
+  bool ensureDiscoveredAt(
+    UnifiedMediaLibrarySource source,
+    int animeId,
+    int millis,
+  ) {
+    final map = _discoveredAtMillis[_sourceKey(source)] ??= <int, int>{};
+    if (map.containsKey(animeId)) return false;
+    map[animeId] = millis;
+    return true;
+  }
+
+  /// 用户点开某部番剧详情后，单独把它标记为已浏览并立即持久化基线。
+  /// 该番剧的 NEW 标识从此消除，直到将来再次出现新番剧/新集数。
+  Future<void> markAnimeSeen(
+    UnifiedMediaLibrarySource source,
+    int animeId,
+    int currentEpisodeCount,
+  ) async {
+    final key = _sourceKey(source);
+    (_baselines[key] ??= <int, int>{})[animeId] = currentEpisodeCount;
+    // NEW 已消除，发现时间一并移除，排序回归最近观看时间。
+    _discoveredAtMillis[key]?.remove(animeId);
+    _initializedSources.add(key);
+    await _persistSource(source);
+  }
+
+  /// 用当前媒体库快照整体建立/刷新基线并持久化（用于首次运行静默建立基线）。
+  Future<void> syncBaseline(
+    UnifiedMediaLibrarySource source,
+    Map<int, int> currentEpisodeCounts,
+  ) async {
+    final key = _sourceKey(source);
+    _baselines[key] = Map<int, int>.of(currentEpisodeCounts);
+    // 首次建立基线不显示 NEW，也不应有任何发现时间。
+    _discoveredAtMillis[key] = <int, int>{};
+    _loadedSources.add(key);
+    _initializedSources.add(key);
+    await _persistSource(source);
+  }
+
+  /// 把媒体库里已经消失的番剧（文件被移出文件夹）从基线中剔除，
+  /// 这样同一部番剧以后重新出现时才能再次被判定为新内容。
+  /// 只删除缺失项、不新增现有项，因此不会误清当前仍带 NEW 的番剧。
+  /// 返回是否发生了剔除（调用方据此决定是否持久化）。
+  bool pruneMissing(
+    UnifiedMediaLibrarySource source,
+    Set<int> presentAnimeIds,
+  ) {
+    final key = _sourceKey(source);
+    var changed = false;
+    final baseline = _baselines[key];
+    if (baseline != null && baseline.isNotEmpty) {
+      final staleIds = baseline.keys
+          .where((id) => !presentAnimeIds.contains(id))
+          .toList(growable: false);
+      if (staleIds.isNotEmpty) {
+        for (final id in staleIds) {
+          baseline.remove(id);
+        }
+        changed = true;
+      }
+    }
+    // 发现时间表也要独立剔除：全新番剧尚未写入基线，只存在于发现时间表里。
+    final discovered = _discoveredAtMillis[key];
+    if (discovered != null && discovered.isNotEmpty) {
+      final staleDiscovered = discovered.keys
+          .where((id) => !presentAnimeIds.contains(id))
+          .toList(growable: false);
+      if (staleDiscovered.isNotEmpty) {
+        for (final id in staleDiscovered) {
+          discovered.remove(id);
+        }
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /// 持久化指定数据源当前的内存基线。
+  Future<void> persist(UnifiedMediaLibrarySource source) async {
+    await _persistSource(source);
+  }
+
+  /// 把指定数据源当前的内存基线和发现时间合并写入 SharedPreferences。
+  Future<void> _persistSource(UnifiedMediaLibrarySource source) async {
+    final key = _sourceKey(source);
+    final current = _baselines[key] ?? const <int, int>{};
+    final currentDiscovered = _discoveredAtMillis[key] ?? const <int, int>{};
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final all = <String, dynamic>{};
+      final raw = prefs.getString(_baselineKey);
+      if (raw != null && raw.isNotEmpty) {
+        final existing = json.decode(raw);
+        if (existing is Map) {
+          all.addAll(Map<String, dynamic>.from(existing));
+        }
+      }
+      all[key] = current.map((k, v) => MapEntry<String, dynamic>('$k', v));
+      all['__initialized_$key'] = true;
+      await prefs.setString(_baselineKey, json.encode(all));
+
+      final discoveredAll = <String, dynamic>{};
+      final discoveredRaw = prefs.getString(_discoveredAtKey);
+      if (discoveredRaw != null && discoveredRaw.isNotEmpty) {
+        final discoveredExisting = json.decode(discoveredRaw);
+        if (discoveredExisting is Map) {
+          discoveredAll
+              .addAll(Map<String, dynamic>.from(discoveredExisting));
+        }
+      }
+      discoveredAll[key] = currentDiscovered
+          .map((k, v) => MapEntry<String, dynamic>('$k', v));
+      await prefs.setString(
+          _discoveredAtKey, json.encode(discoveredAll));
+    } catch (e) {
+      debugPrint('保存媒体库新内容基线失败: $e');
+    }
+  }
+}
+
+/// 媒体库「最近点开详情时间」持久化存储。
+///
+/// 综合排序 / 最近观看排序会把用户点开过详情的番剧排到前面。
+/// 若该时间只存在 State 内存里，切换标签页、进入本地库管理后返回、
+/// 重启应用都会让排序还原。这里按数据源把 {番剧ID: 点开时间毫秒} 持久化到
+/// SharedPreferences，使排序在页面重建与重启后保持不变。
+class LibraryOpenTimeStore {
+  LibraryOpenTimeStore._();
+
+  static final LibraryOpenTimeStore instance = LibraryOpenTimeStore._();
+
+  static const String _storageKey = 'library_last_open_time_v1';
+
+  final Map<String, Map<int, int>> _openTimesMillis = {};
+  final Set<String> _loadedSources = <String>{};
+
+  String _sourceKey(UnifiedMediaLibrarySource source) {
+    return switch (source) {
+      UnifiedMediaLibrarySource.local => 'local',
+      UnifiedMediaLibrarySource.webdav => 'webdav',
+      UnifiedMediaLibrarySource.smb => 'smb',
+    };
+  }
+
+  Future<void> load(UnifiedMediaLibrarySource source) async {
+    final key = _sourceKey(source);
+    if (_loadedSources.contains(key)) return;
+    final map = <int, int>{};
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_storageKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = json.decode(raw);
+        if (decoded is Map) {
+          final sourceMap = decoded[key];
+          if (sourceMap is Map) {
+            sourceMap.forEach((k, v) {
+              final animeId = int.tryParse('$k');
+              if (animeId != null && v is num && v > 0) {
+                map[animeId] = v.toInt();
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('加载媒体库点开时间失败: $e');
+    }
+    _openTimesMillis[key] = map;
+    _loadedSources.add(key);
+  }
+
+  /// 返回指定数据源的番剧点开时间（DateTime 视图）；尚未加载时返回空表。
+  Map<int, DateTime> openTimes(UnifiedMediaLibrarySource source) {
+    final map = _openTimesMillis[_sourceKey(source)];
+    if (map == null) return const <int, DateTime>{};
+    return map.map(
+      (k, v) => MapEntry(k, DateTime.fromMillisecondsSinceEpoch(v)),
+    );
+  }
+
+  /// 记录一次点开详情并立即持久化（合并写入，不影响其他数据源）。
+  Future<void> recordOpen(
+    UnifiedMediaLibrarySource source,
+    int animeId,
+  ) async {
+    final key = _sourceKey(source);
+    final map = _openTimesMillis[key] ??= <int, int>{};
+    map[animeId] = DateTime.now().millisecondsSinceEpoch;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final all = <String, dynamic>{};
+      final raw = prefs.getString(_storageKey);
+      if (raw != null && raw.isNotEmpty) {
+        final existing = json.decode(raw);
+        if (existing is Map) {
+          all.addAll(Map<String, dynamic>.from(existing));
+        }
+      }
+      all[key] = map.map((k, v) => MapEntry<String, dynamic>('$k', v));
+      await prefs.setString(_storageKey, json.encode(all));
+    } catch (e) {
+      debugPrint('保存媒体库点开时间失败: $e');
+    }
+  }
+}
 
 class AdaptiveMediaCollectionView extends material.StatefulWidget {
   const AdaptiveMediaCollectionView({
@@ -56,11 +414,28 @@ class _AdaptiveMediaCollectionViewState
   final Map<int, Future<BangumiAnime>> _detailRequests =
       <int, Future<BangumiAnime>>{};
   String _query = '';
-  MediaCollectionSort _sort = MediaCollectionSort.recentlyAdded;
+  MediaCollectionSort _sort = MediaCollectionSort.comprehensive;
+  int _sortChangeRevision = 0;
   bool _isSyncing = false;
   bool _isLoadingWebCollection = false;
   bool _requestedHistoryLoad = false;
   List<WatchHistoryItem> _webCollectionItems = const <WatchHistoryItem>[];
+
+  // 每部番剧当前在库中的集数，以及带有 NEW 标识的番剧集合。
+  Map<int, int> _episodeCounts = const <int, int>{};
+  Set<int> _newAnimeIds = const <int>{};
+  // 每个 NEW 番剧的首次发现时间（毫秒时间戳），供综合排序使用。
+  Map<int, int> _newDiscoveredAtMillis = const <int, int>{};
+  // 每部番剧最近一次被点开详情的时间：用于「最近观看」和「综合」排序，
+  // 只要点开过就把该番剧排到前面，不强制要求实际播放。
+  final Map<int, DateTime> _lastOpenTime = <int, DateTime>{};
+  // 排序兜底时间：从未点开过详情的番剧统一排最后。
+  static final DateTime _epoch = DateTime.fromMillisecondsSinceEpoch(0);
+  // 首次运行静默建立基线只执行一次
+  bool _baselineBootstrapped = false;
+  final LibraryNewContentTracker _newContentTracker =
+      LibraryNewContentTracker.instance;
+  final LibraryOpenTimeStore _openTimeStore = LibraryOpenTimeStore.instance;
 
   @override
   void initState() {
@@ -70,10 +445,50 @@ class _AdaptiveMediaCollectionViewState
         if (mounted) _loadWebCollection();
       });
     }
+    unawaited(_loadNewContentBaseline());
+    unawaited(_loadOpenTimes());
+    unawaited(_loadSortPreference());
+  }
+
+  Future<void> _loadSortPreference() async {
+    final source = widget.source;
+    final revision = _sortChangeRevision;
+    final savedSort = await _LibrarySortPreferenceStore.load(source);
+    if (!mounted ||
+        widget.source != source ||
+        _sortChangeRevision != revision ||
+        savedSort == null) {
+      return;
+    }
+    if (_sort != savedSort) setState(() => _sort = savedSort);
+  }
+
+  void _setSort(MediaCollectionSort value) {
+    _sortChangeRevision++;
+    if (_sort != value) setState(() => _sort = value);
+    unawaited(_LibrarySortPreferenceStore.save(widget.source, value));
+  }
+
+  Future<void> _loadNewContentBaseline() async {
+    await _newContentTracker.load(widget.source);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  // 从持久化存储恢复各番剧的点开时间，避免页面重建后排序还原。
+  Future<void> _loadOpenTimes() async {
+    await _openTimeStore.load(widget.source);
+    if (!mounted) return;
+    setState(() {
+      _lastOpenTime
+        ..clear()
+        ..addAll(_openTimeStore.openTimes(widget.source));
+    });
   }
 
   @override
   void dispose() {
+    // NEW 标识只在用户点开对应番剧后才消除，离开页面不更新基线。
     _searchController.dispose();
     super.dispose();
   }
@@ -106,7 +521,10 @@ class _AdaptiveMediaCollectionViewState
                     provider.history,
                     widget.source,
                   );
-        final filteredItems = _filterAndSort(allItems);
+        _episodeCounts = _episodeCountByAnime(provider.history);
+        _recomputeNewContentState();
+        final filteredItems =
+            _filterAndSort(allItems, _lastOpenTime);
         for (final item in filteredItems) {
           _ensureDetail(item.animeId!);
         }
@@ -119,7 +537,7 @@ class _AdaptiveMediaCollectionViewState
               sort: _sort,
               isSyncing: _isSyncing,
               onSearchChanged: (value) => setState(() => _query = value),
-              onSortChanged: (value) => setState(() => _sort = value),
+              onSortChanged: _setSort,
               onSync: _isSyncing ? null : _sync,
             ),
             material.Expanded(
@@ -131,6 +549,7 @@ class _AdaptiveMediaCollectionViewState
                 items: filteredItems,
                 allHistory: provider.history,
                 details: _details,
+                newAnimeIds: _newAnimeIds,
                 onRefresh: _sync,
                 onTap: _openAnimeDetail,
               ),
@@ -141,17 +560,144 @@ class _AdaptiveMediaCollectionViewState
     );
   }
 
-  List<WatchHistoryItem> _filterAndSort(List<WatchHistoryItem> items) {
+  Map<int, int> _episodeCountByAnime(List<WatchHistoryItem> history) {
+    final counts = <int, int>{};
+    for (final item in history) {
+      if (!mediaLibraryItemMatchesSource(item, widget.source,
+          includeClearedMatchInfo: true)) {
+        continue;
+      }
+      final animeId = item.animeId;
+      if (animeId == null) continue;
+      counts[animeId] = (counts[animeId] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /// 依据持久化基线重新计算 NEW 集合。
+  /// 该方法在 build 中调用，不能触发 setState。
+  void _recomputeNewContentState() {
+    if (!_newContentTracker.isReady(widget.source)) {
+      _newAnimeIds = const <int>{};
+      _newDiscoveredAtMillis = const <int, int>{};
+      return;
+    }
+    // 首次运行（基线尚未建立）：用当前库快照静默建立基线，不显示任何 NEW；
+    // 之后只有真正新增的番剧或集数才会被标记。
+    if (!_newContentTracker.isInitialized(widget.source)) {
+      _newAnimeIds = const <int>{};
+      _newDiscoveredAtMillis = const <int, int>{};
+      if (!_baselineBootstrapped && _episodeCounts.isNotEmpty) {
+        _baselineBootstrapped = true;
+        unawaited(
+          _newContentTracker.syncBaseline(widget.source, _episodeCounts),
+        );
+      }
+      return;
+    }
+    // NEW 标识会一直保留，直到用户点开对应番剧详情，不会随时间自动消失。
+    // 先把已从媒体库消失的番剧（文件被移出）移出基线：
+    // 它们将来重新出现时应再次算作新内容。仅在快照非空时执行，
+    // 避免历史尚未加载（空列表）时误把整个基线清空。
+    if (_episodeCounts.isNotEmpty) {
+      final pruned = _newContentTracker.pruneMissing(
+        widget.source,
+        _episodeCounts.keys.toSet(),
+      );
+      if (pruned) {
+        unawaited(_newContentTracker.persist(widget.source));
+      }
+    }
+    _newAnimeIds = _episodeCounts.entries
+        .where((entry) => _newContentTracker.hasNewContent(
+              widget.source,
+              entry.key,
+              entry.value,
+            ))
+        .map((entry) => entry.key)
+        .toSet();
+    // 记录每个 NEW 番剧的首次发现时间：只在第一次发现时写入并持久化，
+    // 综合排序据此把它排到最前，之后随最近观看时间自然下沉。
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    var discoveredChanged = false;
+    final discoveredMap = <int, int>{};
+    for (final animeId in _newAnimeIds) {
+      if (_newContentTracker.ensureDiscoveredAt(
+          widget.source, animeId, nowMillis)) {
+        discoveredChanged = true;
+      }
+      final at = _newContentTracker.discoveredAt(widget.source, animeId);
+      if (at != null) discoveredMap[animeId] = at;
+    }
+    _newDiscoveredAtMillis = discoveredMap;
+    if (discoveredChanged) {
+      unawaited(_newContentTracker.persist(widget.source));
+    }
+  }
+
+  List<WatchHistoryItem> _filterAndSort(
+    List<WatchHistoryItem> items,
+    Map<int, DateTime> lastOpenTime,
+  ) {
     final query = _query.trim().toLowerCase();
     final filtered = items.where((item) {
       if (query.isEmpty) return true;
       return item.animeName.toLowerCase().contains(query) ||
           (item.episodeTitle?.toLowerCase().contains(query) ?? false);
     }).toList();
-    if (_sort == MediaCollectionSort.name) {
-      filtered.sort((a, b) => a.animeName.compareTo(b.animeName));
+    switch (_sort) {
+      case MediaCollectionSort.name:
+        filtered.sort((a, b) => a.animeName.compareTo(b.animeName));
+      case MediaCollectionSort.recentlyAdded:
+        // 最近观看：仅按「最近点开详情时间」降序，不使用真实播放时间。
+        // 点开过番剧详情的排前面，从未点开过的排最后。
+        filtered.sort((a, b) {
+          final aEffective = _effectiveRecentlyWatchedTime(a, lastOpenTime);
+          final bEffective = _effectiveRecentlyWatchedTime(b, lastOpenTime);
+          return bEffective.compareTo(aEffective);
+        });
+      case MediaCollectionSort.comprehensive:
+        filtered.sort(_compareComprehensive);
     }
     return filtered;
+  }
+
+  /// 最近观看排序的有效时间：最近点开详情时间。
+  /// 未点开过详情的返回 epoch（排最后），不使用真实观看时间。
+  DateTime _effectiveRecentlyWatchedTime(
+    WatchHistoryItem item,
+    Map<int, DateTime> lastOpenTime,
+  ) {
+    return item.animeId != null
+        ? (lastOpenTime[item.animeId] ?? _epoch)
+        : _epoch;
+  }
+
+  /// 综合排序：番剧更新（NEW 发现）前移、点击番剧（点开详情）前移。
+  /// 排序时间取「最近点开详情时间」与「NEW 首次发现时间」的较新者，
+  /// 不使用真实观看时间。
+  int _compareComprehensive(WatchHistoryItem a, WatchHistoryItem b) {
+    final aEffective = _effectiveComprehensiveTime(a);
+    final bEffective = _effectiveComprehensiveTime(b);
+    return bEffective.compareTo(aEffective);
+  }
+
+  /// 综合排序的有效时间：最近点开、NEW 发现两者取较新者。
+  /// 两者都没有时返回 0（排最后）。
+  int _effectiveComprehensiveTime(WatchHistoryItem item) {
+    var effective = 0;
+    if (item.animeId != null) {
+      final open = _lastOpenTime[item.animeId];
+      if (open != null) {
+        final openMillis = open.millisecondsSinceEpoch;
+        if (openMillis > effective) effective = openMillis;
+      }
+      final discovered = _newDiscoveredAtMillis[item.animeId];
+      if (discovered != null && discovered > effective) {
+        effective = discovered;
+      }
+    }
+    return effective;
   }
 
   void _ensureDetail(int animeId) {
@@ -233,6 +779,29 @@ class _AdaptiveMediaCollectionViewState
   }
 
   Future<void> _openAnimeDetail(WatchHistoryItem item) async {
+    // 记录「最近点开详情」时间，供最近观看 / 综合排序使用：
+    // 只要点开过番剧，就把它排到前面。
+    final openAnimeId = item.animeId;
+    if (openAnimeId != null) {
+      _lastOpenTime[openAnimeId] = DateTime.now();
+      unawaited(_openTimeStore.recordOpen(widget.source, openAnimeId));
+    }
+    // 用户点开详情即视为已知晓该番剧的新内容：立即消除 NEW 标识并持久化基线。
+    // 这是 NEW 标识唯一的消除方式。
+    final animeId = item.animeId;
+    if (animeId != null && _newAnimeIds.contains(animeId)) {
+      unawaited(
+        _newContentTracker.markAnimeSeen(
+          widget.source,
+          animeId,
+          _episodeCounts[animeId] ?? 0,
+        ),
+      );
+      setState(() {
+        _newAnimeIds = {..._newAnimeIds}..remove(animeId);
+        _newDiscoveredAtMillis = {..._newDiscoveredAtMillis}..remove(animeId);
+      });
+    }
     final provider = context.read<WatchHistoryProvider>();
     final episodes = provider.history
         .where((candidate) =>
@@ -305,14 +874,15 @@ class _AdaptiveMediaCollectionViewState
         previousFocus.canRequestFocus &&
         result == null) {
       material.WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted &&
-            previousFocus.canRequestFocus) {
+        if (mounted && previousFocus.canRequestFocus) {
           previousFocus.requestFocus();
         }
       });
     }
 
     if (result != null) widget.onPlayEpisode(result);
+    // 详情页关闭后重排：点开时间已记录，番剧应移动到「最近观看」靠前位置。
+    if (mounted) setState(() {});
   }
 
   static String _title(WatchHistoryItem item, BangumiAnime? detail) {
@@ -384,15 +954,10 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
     return LocalLibraryControlBar(
       title: sourceLabel,
       searchController: controller,
-      currentSort: sort == MediaCollectionSort.name
-          ? LocalLibrarySortType.name
-          : LocalLibrarySortType.dateAdded,
+      showComprehensiveSort: true,
+      currentSort: _toLocalSortType(sort),
       onSearchChanged: onSearchChanged,
-      onSortChanged: (value) => onSortChanged(
-        value == LocalLibrarySortType.name
-            ? MediaCollectionSort.name
-            : MediaCollectionSort.recentlyAdded,
-      ),
+      onSortChanged: (value) => onSortChanged(_fromLocalSortType(value)),
       trailingActions: [
         LocalLibraryActionControl(
           label: isSyncing ? '同步中' : '同步$sourceLabel',
@@ -404,6 +969,24 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
     );
   }
 
+  LocalLibrarySortType _toLocalSortType(MediaCollectionSort sort) {
+    return switch (sort) {
+      MediaCollectionSort.comprehensive => LocalLibrarySortType.comprehensive,
+      MediaCollectionSort.name => LocalLibrarySortType.name,
+      MediaCollectionSort.recentlyAdded => LocalLibrarySortType.dateAdded,
+    };
+  }
+
+  MediaCollectionSort _fromLocalSortType(LocalLibrarySortType sort) {
+    return switch (sort) {
+      LocalLibrarySortType.comprehensive => MediaCollectionSort.comprehensive,
+      LocalLibrarySortType.name => MediaCollectionSort.name,
+      LocalLibrarySortType.dateAdded ||
+      LocalLibrarySortType.rating =>
+        MediaCollectionSort.recentlyAdded,
+    };
+  }
+
   Future<void> _showPhoneSort(material.BuildContext context) async {
     final selected =
         await CupertinoBottomSheet.showSelection<MediaCollectionSort>(
@@ -411,7 +994,12 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
       title: '媒体库排序',
       options: [
         CupertinoBottomSheetOption(
-          label: '最近添加',
+          label: '综合排序',
+          value: MediaCollectionSort.comprehensive,
+          selected: sort == MediaCollectionSort.comprehensive,
+        ),
+        CupertinoBottomSheetOption(
+          label: '最近观看',
           value: MediaCollectionSort.recentlyAdded,
           selected: sort == MediaCollectionSort.recentlyAdded,
         ),
@@ -452,11 +1040,16 @@ class _TelevisionMediaCollectionControlBar extends material.StatelessWidget {
 
   @override
   material.Widget build(material.BuildContext context) {
-    final nextSort = sort == MediaCollectionSort.recentlyAdded
-        ? MediaCollectionSort.name
-        : MediaCollectionSort.recentlyAdded;
-    final sortLabel =
-        sort == MediaCollectionSort.recentlyAdded ? '最近添加' : '名称排序';
+    final nextSort = switch (sort) {
+      MediaCollectionSort.comprehensive => MediaCollectionSort.recentlyAdded,
+      MediaCollectionSort.recentlyAdded => MediaCollectionSort.name,
+      MediaCollectionSort.name => MediaCollectionSort.comprehensive,
+    };
+    final sortLabel = switch (sort) {
+      MediaCollectionSort.comprehensive => '综合排序',
+      MediaCollectionSort.recentlyAdded => '最近观看',
+      MediaCollectionSort.name => '名称排序',
+    };
     return material.Padding(
       padding: const material.EdgeInsets.only(bottom: 14),
       child: NipaplayLargeScreenPanel(
@@ -509,6 +1102,7 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
     required this.items,
     required this.allHistory,
     required this.details,
+    required this.newAnimeIds,
     required this.onRefresh,
     required this.onTap,
   });
@@ -519,8 +1113,21 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
   final List<WatchHistoryItem> items;
   final List<WatchHistoryItem> allHistory;
   final Map<int, BangumiAnime> details;
+  final Set<int> newAnimeIds;
   final Future<void> Function() onRefresh;
   final material.ValueChanged<WatchHistoryItem> onTap;
+
+  material.ValueKey<String> _itemKey(WatchHistoryItem item) {
+    final identity = item.animeId?.toString() ?? item.filePath;
+    return material.ValueKey<String>(
+      'media-collection-${source.name}-$identity',
+    );
+  }
+
+  int? _findItemIndex(material.Key key) {
+    final index = items.indexWhere((item) => _itemKey(item) == key);
+    return index < 0 ? null : index;
+  }
 
   @override
   material.Widget build(material.BuildContext context) {
@@ -561,6 +1168,7 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
           key: const material.ValueKey<String>(
             'television-media-collection-grid',
           ),
+          findChildIndexCallback: _findItemIndex,
           primary: true,
           padding: const material.EdgeInsets.fromLTRB(6, 4, 6, 72),
           physics: const material.ClampingScrollPhysics(),
@@ -575,11 +1183,9 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
             final item = items[index];
             final detail = details[item.animeId];
             return NipaplayLargeScreenModeScope(
+              key: _itemKey(item),
               isActive: true,
               child: AnimeCard(
-                key: material.ValueKey<String>(
-                  'television-media-poster-${item.animeId}',
-                ),
                 imageUrl:
                     _AdaptiveMediaCollectionViewState._imageUrl(item, detail),
                 name: _AdaptiveMediaCollectionViewState._title(item, detail),
@@ -587,6 +1193,15 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
                 source: sourceLabel,
                 enableBackgroundBlur: false,
                 enableBackdropImage: false,
+                // 每张卡的 8px 阴影都是一次遮罩模糊；电视网格一屏十几张，
+                // 滚动时逐帧重绘。电视上不需要这层装饰。
+                enableShadow: false,
+                // 电视网格的格子约 190 逻辑像素宽、海报区不足 270 高。
+                // 显式限制解码尺寸，避免在低端盒子上按原始分辨率解码整张海报
+                // （一次可达数 MB，且解码本身要几十毫秒主 isolate CPU）。
+                imageDecodeWidth: 400,
+                imageDecodeHeight: 560,
+                showNewBadge: newAnimeIds.contains(item.animeId),
                 onTap: () => onTap(item),
               ),
             );
@@ -625,11 +1240,13 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
           padding: const material.EdgeInsets.fromLTRB(20, 12, 20, 112),
           sliver: material.SliverList.separated(
             itemCount: items.length,
+            findItemIndexCallback: _findItemIndex,
             separatorBuilder: (_, __) => const material.SizedBox(height: 12),
             itemBuilder: (context, index) {
               final item = items[index];
               final detail = details[item.animeId];
               return CupertinoAnimeCard(
+                key: _itemKey(item),
                 title: _AdaptiveMediaCollectionViewState._title(item, detail),
                 imageUrl:
                     _AdaptiveMediaCollectionViewState._imageUrl(item, detail),
@@ -638,6 +1255,7 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
                 sourceLabel: sourceLabel,
                 rating: detail?.rating,
                 summary: detail?.summary,
+                showNewBadge: newAnimeIds.contains(item.animeId),
                 onTap: () => onTap(item),
               );
             },
@@ -671,6 +1289,7 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
     final showSummary =
         context.watch<AppearanceSettingsProvider>().showAnimeCardSummary;
     return material.GridView.builder(
+      findChildIndexCallback: _findItemIndex,
       gridDelegate: material.SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: showSummary
             ? HorizontalAnimeCard.detailedGridMaxCrossAxisExtent
@@ -690,12 +1309,14 @@ class AdaptiveMediaCollectionItems extends material.StatelessWidget {
         final item = items[index];
         final detail = details[item.animeId];
         return HorizontalAnimeCard(
+          key: _itemKey(item),
           imageUrl: _AdaptiveMediaCollectionViewState._imageUrl(item, detail),
           title: _AdaptiveMediaCollectionViewState._title(item, detail),
           rating: detail?.rating,
           source: AnimeCard.getSourceFromFilePath(item.filePath),
           summary: detail?.summary,
           progress: _watchProgress(item.animeId!, detail),
+          showNewBadge: newAnimeIds.contains(item.animeId),
           onTap: () => onTap(item),
         );
       },

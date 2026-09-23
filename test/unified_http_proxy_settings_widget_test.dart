@@ -46,6 +46,10 @@ void main() {
 
   testWidgets('desktop network settings validate and save the HTTP proxy',
       (tester) async {
+    tester.view.physicalSize = const Size(1024, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     try {
       SharedPreferences.setMockInitialValues({});
@@ -73,8 +77,7 @@ void main() {
         find.textContaining('播放器代理仅支持 MDK/MediaKit 内核'),
         findsOneWidget,
       );
-      await tester.ensureVisible(proxyTile);
-      await tester.tap(proxyTile);
+      await _tapProxyTile(tester, proxyTile);
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).last, 'https://proxy:443');
       await tester.tap(find.text('保存').last);
@@ -87,8 +90,7 @@ void main() {
       expect(preferences.getString(SettingsKeys.playerHttpProxy), isNull);
 
       await tester.pump(const Duration(seconds: 5));
-      await tester.ensureVisible(proxyTile);
-      await tester.tap(proxyTile);
+      await _tapProxyTile(tester, proxyTile);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byType(TextField).last,
@@ -112,4 +114,21 @@ void main() {
       SharedPreferences.setMockInitialValues({});
     }
   });
+}
+
+Future<void> _tapProxyTile(WidgetTester tester, Finder proxyTile) async {
+  final settingsScrollable = find.descendant(
+    of: find.byType(NetworkSettingsContent),
+    matching: find.byType(Scrollable),
+  );
+  // The title can already be built while it is below the viewport. Scroll
+  // until it is hit-testable, then finish layout before attempting the tap.
+  await tester.scrollUntilVisible(
+    proxyTile.hitTestable(),
+    200,
+    scrollable: settingsScrollable,
+  );
+  await tester.pumpAndSettle();
+  expect(proxyTile.hitTestable(), findsOneWidget);
+  await tester.tap(proxyTile.hitTestable());
 }

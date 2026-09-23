@@ -1,10 +1,11 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_home_page.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_window_page.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tv_safe_blur.dart';
 import 'package:nipaplay/utils/hotkey_service.dart';
 
 /// 大屏幕模式下承载二级页面的统一容器。
@@ -21,6 +22,7 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
     this.maxWidth = 1280,
     this.maxHeightFactor = 0.88,
     this.autofocusClose = true,
+    this.compact = false,
   });
 
   final String title;
@@ -30,6 +32,7 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
   final double maxWidth;
   final double maxHeightFactor;
   final bool autofocusClose;
+  final bool compact;
 
   static Future<T?> show<T>({
     required BuildContext context,
@@ -41,6 +44,7 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
     bool autofocusClose = true,
     bool barrierDismissible = true,
     bool enableAnimation = true,
+    bool compact = false,
   }) {
     HotkeyService.overlayPush();
     final result = Navigator.of(context).push<T>(
@@ -57,6 +61,7 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
               maxWidth: maxWidth,
               maxHeightFactor: maxHeightFactor,
               autofocusClose: autofocusClose,
+              compact: compact,
               onClose: () => Navigator.of(routeContext).maybePop(),
               child: Builder(builder: builder),
             ),
@@ -84,7 +89,9 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
         children: [
           Positioned.fill(
             child: ClipRect(
-              child: BackdropFilter(
+              // 电视上跳过全屏 σ26 的 backdrop 模糊（每帧重算，纯填充率开销），
+              // 保留下方的半透明底色即可。
+              child: TvSafeBackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
                 child: ColoredBox(
                   color: isDark
@@ -110,9 +117,9 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
           ),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 48,
-                vertical: 34,
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 24 : 48,
+                vertical: compact ? 16 : 34,
               ),
               child: Center(
                 child: ConstrainedBox(
@@ -137,9 +144,16 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
                           color: Colors.black.withValues(
                             alpha: isDark ? 0.42 : 0.18,
                           ),
-                          blurRadius: 54,
-                          spreadRadius: 4,
-                          offset: const Offset(0, 22),
+                          // blurRadius 54 + spread 4 是一次覆盖整个面板的遮罩模糊，
+                          // 在电视 GPU 上代价很高。电视上收敛到 12/0。
+                          blurRadius:
+                              TvSafeBackdropFilter.shouldSkipBlur ? 12 : 54,
+                          spreadRadius:
+                              TvSafeBackdropFilter.shouldSkipBlur ? 0 : 4,
+                          offset: Offset(
+                            0,
+                            TvSafeBackdropFilter.shouldSkipBlur ? 8 : 22,
+                          ),
                         ),
                       ],
                     ),
@@ -151,11 +165,11 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                28,
-                                22,
+                              padding: EdgeInsets.fromLTRB(
+                                compact ? 20 : 28,
+                                compact ? 12 : 22,
                                 18,
-                                18,
+                                compact ? 12 : 18,
                               ),
                               child: Row(
                                 children: [
@@ -170,7 +184,7 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             color: textColor,
-                                            fontSize: 28,
+                                            fontSize: compact ? 20 : 28,
                                             fontWeight: FontWeight.w900,
                                           ),
                                         ),
@@ -185,7 +199,7 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
                                               color: textColor.withValues(
                                                 alpha: 0.60,
                                               ),
-                                              fontSize: 14,
+                                              fontSize: compact ? 12 : 14,
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
@@ -194,20 +208,34 @@ class NipaplayLargeScreenViewContainer extends StatelessWidget {
                                     ),
                                   ),
                                   const SizedBox(width: 20),
-                                  Tooltip(
-                                    message: '关闭',
-                                    child: NipaplayLargeScreenFocusableAction(
-                                      autofocus: autofocusClose,
-                                      onActivate: onClose ??
-                                          () =>
-                                              Navigator.of(context).maybePop(),
-                                      borderRadius: BorderRadius.circular(10),
-                                      focusScale: 1.06,
-                                      padding: const EdgeInsets.all(13),
-                                      child: const Icon(
-                                        Icons.close_rounded,
-                                        size: 24,
-                                      ),
+                                  IconButton(
+                                    tooltip: '关闭',
+                                    autofocus: autofocusClose,
+                                    onPressed: onClose ??
+                                        () => Navigator.of(context).maybePop(),
+                                    style: ButtonStyle(
+                                      backgroundColor:
+                                          const WidgetStatePropertyAll(
+                                              Colors.transparent),
+                                      overlayColor:
+                                          const WidgetStatePropertyAll(
+                                              Colors.transparent),
+                                      side: const WidgetStatePropertyAll(
+                                          BorderSide.none),
+                                      foregroundColor: WidgetStateProperty
+                                          .resolveWith((states) => states
+                                                      .contains(WidgetState
+                                                          .focused) ||
+                                                  states.contains(
+                                                      WidgetState.hovered) ||
+                                                  states.contains(
+                                                      WidgetState.pressed)
+                                              ? AppAccentColors.current
+                                              : textColor),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 24,
                                     ),
                                   ),
                                 ],

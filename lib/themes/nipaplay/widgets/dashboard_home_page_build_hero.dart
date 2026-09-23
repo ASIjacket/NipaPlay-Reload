@@ -1,7 +1,34 @@
 part of dashboard_home_page;
 
 extension DashboardHomePageHeroBuild on _DashboardHomePageState {
+  /// 主页顶部推荐区是否还有任意一个控件需要显示。
+  /// [isPhone] 为 true 时（手机/窄窗口布局）只有左侧大图轮播，
+  /// 右侧两张小卡片仅在桌面/平板布局中存在。
+  bool _isAnyHomeHeroWidgetVisible(bool isPhone) {
+    final appearanceSettings = context.watch<AppearanceSettingsProvider>();
+    if (isPhone) {
+      return appearanceSettings.showHomeHeroBanner;
+    }
+    return appearanceSettings.showHomeHeroBanner ||
+        appearanceSettings.showHomeHeroSideCardTop ||
+        appearanceSettings.showHomeHeroSideCardBottom;
+  }
+
   Widget _buildHeroBanner({required bool isPhone}) {
+    final appearanceSettings = context.watch<AppearanceSettingsProvider>();
+    final bool showMainBanner = appearanceSettings.showHomeHeroBanner;
+    final bool showSideCardTop = appearanceSettings.showHomeHeroSideCardTop;
+    final bool showSideCardBottom =
+        appearanceSettings.showHomeHeroSideCardBottom;
+    final bool showAnySideCard =
+        !isPhone && (showSideCardTop || showSideCardBottom);
+
+    // 顶部三个控件全部被关闭时不占用任何空间
+    if ((isPhone && !showMainBanner) ||
+        (!isPhone && !showMainBanner && !showAnySideCard)) {
+      return const SizedBox.shrink();
+    }
+
     if (_isLoadingRecommended) {
       return Container(
         height: isPhone ? 220 : 400, // 保持一致的高度
@@ -68,64 +95,78 @@ extension DashboardHomePageHeroBuild on _DashboardHomePageState {
         children: [
           if (isPhone)
             // 全宽轮播
-            PageView.builder(
-              controller: _heroBannerPageController,
-              itemCount: pageCount,
-              onPageChanged: (index) {
-                _currentHeroBannerIndex = index;
-                _heroBannerIndexNotifier.value = index;
-                _stopAutoSwitch();
-                Timer(const Duration(seconds: 3), () {
-                  _resumeAutoSwitch();
-                });
-              },
-              itemBuilder: (context, index) {
-                final item = items[index];
-                return _buildMainHeroBannerItem(item, compact: true);
-              },
-            )
+            if (showMainBanner)
+              PageView.builder(
+                controller: _heroBannerPageController,
+                itemCount: pageCount,
+                onPageChanged: (index) {
+                  _currentHeroBannerIndex = index;
+                  _heroBannerIndexNotifier.value = index;
+                  _stopAutoSwitch();
+                  Timer(const Duration(seconds: 3), () {
+                    _resumeAutoSwitch();
+                  });
+                },
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  return _buildMainHeroBannerItem(item, compact: true);
+                },
+              )
+            else
+              const SizedBox.shrink()
           else
             Row(
               children: [
                 // 左侧主推荐横幅 - 占据大部分宽度，支持滑动（前5个）
-                Expanded(
-                  flex: 2,
-                  child: PageView.builder(
-                    controller: _heroBannerPageController,
-                    itemCount: pageCount, // 固定显示前5个
-                    onPageChanged: (index) {
-                      _currentHeroBannerIndex = index;
-                      _heroBannerIndexNotifier.value = index;
-                      _stopAutoSwitch();
-                      Timer(const Duration(seconds: 3), () {
-                        _resumeAutoSwitch();
-                      });
-                    },
-                    itemBuilder: (context, index) {
-                      final item = items[index]; // 使用前5个
-                      return _buildMainHeroBannerItem(item);
-                    },
+                if (showMainBanner)
+                  Expanded(
+                    flex: 2,
+                    child: PageView.builder(
+                      controller: _heroBannerPageController,
+                      itemCount: pageCount, // 固定显示前5个
+                      onPageChanged: (index) {
+                        _currentHeroBannerIndex = index;
+                        _heroBannerIndexNotifier.value = index;
+                        _stopAutoSwitch();
+                        Timer(const Duration(seconds: 3), () {
+                          _resumeAutoSwitch();
+                        });
+                      },
+                      itemBuilder: (context, index) {
+                        final item = items[index]; // 使用前5个
+                        return _buildMainHeroBannerItem(item);
+                      },
+                    ),
                   ),
-                ),
-                SizedBox(width: 12),
-                // 右侧小卡片区域 - 上下两个（第6和第7个）
-                Expanded(
-                  flex: 1,
-                  child: Column(
-                    children: [
-                      Expanded(
-                          child: _buildSmallRecommendationCard(items[5], 5)),
-                      SizedBox(height: 8),
-                      Expanded(
-                          child: _buildSmallRecommendationCard(items[6], 6)),
-                    ],
+                // 右侧小卡片区域 - 上下两个（第6和第7个），可分别开关
+                if (showAnySideCard) ...[
+                  if (showMainBanner) const SizedBox(width: 12),
+                  Expanded(
+                    flex: 1,
+                    child: Column(
+                      children: [
+                        if (showSideCardTop)
+                          Expanded(
+                              child: _buildSmallRecommendationCard(items[5], 5))
+                        else
+                          const Spacer(),
+                        if (showSideCardTop && showSideCardBottom)
+                          const SizedBox(height: 8),
+                        if (showSideCardBottom)
+                          Expanded(
+                              child: _buildSmallRecommendationCard(items[6], 6))
+                        else
+                          const Spacer(),
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
 
-          // 页面指示器
-          _buildPageIndicator(fullWidth: isPhone, count: pageCount),
+          // 页面指示器（仅在主推荐横幅显示时展示）
+          if (showMainBanner)
+            _buildPageIndicator(fullWidth: isPhone, count: pageCount),
         ],
       ),
     );
@@ -161,8 +202,12 @@ extension DashboardHomePageHeroBuild on _DashboardHomePageState {
                       'hero_img_${item.id}_${item.backgroundImageUrl}'),
                   imageUrl: item.backgroundImageUrl!,
                   fit: BoxFit.cover,
+                  smartCrop: true,
                   width: double.infinity,
                   height: double.infinity,
+                  // 只约束宽度以保持海报原始比例，再交给 BoxFit.cover 裁切。
+                  // 同时传宽高会在 Flutter 解码阶段把竖版海报拉成 16:9。
+                  memCacheWidth: 1280,
                   delayLoad: _shouldDelayImageLoad(), // 根据推荐内容来源决定是否延迟
                   blurIfLowRes: item.source != RecommendedItemSource.dandanplay,
                   forceBlur: item.source != RecommendedItemSource.dandanplay
@@ -427,6 +472,7 @@ extension DashboardHomePageHeroBuild on _DashboardHomePageState {
                       'small_img_${item.id}_${item.backgroundImageUrl}_$index'),
                   imageUrl: item.backgroundImageUrl!,
                   fit: BoxFit.cover,
+                  smartCrop: true,
                   delayLoad: _shouldDelayImageLoad(), // 根据推荐内容来源决定是否延迟
                   width: double.infinity,
                   height: double.infinity,

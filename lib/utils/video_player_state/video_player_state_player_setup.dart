@@ -84,6 +84,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     final initializationGeneration = _playbackGeneration;
     _playbackDetailContext = resolvedDetailContext;
     _statusMessages.clear(); // <--- 新增行：确保消息列表在开始时是空的
+    _isStartupMessageFlowActive = true;
     _initialHistoryItem = historyItem;
     _currentMediaKey = mediaKey ?? MediaIdentityResolver.forPath(videoPath);
 
@@ -126,24 +127,20 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     // 为网络URL添加特定日志
     if (isNetworkUrl) {
       debugPrint('检测到流媒体URL: $videoPath');
-      _statusMessages.add('正在准备流媒体播放...');
-      _notifyListeners();
+      _addStatusMessage('正在准备流媒体播放...');
     } else if (isNewRemotePath) {
       debugPrint('检测到远程媒体库路径: $videoPath');
-      _statusMessages.add('正在准备远程媒体播放...');
-      _notifyListeners();
+      _addStatusMessage('正在准备远程媒体播放...');
     } else if (isJellyfinStream) {
       final infoUrl = playbackSession?.streamUrl ?? actualPlayUrl;
       debugPrint(
         '检测到Jellyfin流媒体: videoPath=$videoPath, actualPlayUrl=$infoUrl',
       );
-      _statusMessages.add('正在准备Jellyfin流媒体播放...');
-      _notifyListeners();
+      _addStatusMessage('正在准备Jellyfin流媒体播放...');
     } else if (isEmbyStream) {
       final infoUrl = playbackSession?.streamUrl ?? actualPlayUrl;
       debugPrint('检测到Emby流媒体: videoPath=$videoPath, actualPlayUrl=$infoUrl');
-      _statusMessages.add('正在准备Emby流媒体播放...');
-      _notifyListeners();
+      _addStatusMessage('正在准备Emby流媒体播放...');
     }
 
     if (!kIsWeb &&
@@ -307,8 +304,12 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
           '${_redactMediaUrlForLog(resolvedActualPlayUrl)}',
         );
       } catch (e) {
-        debugPrint('VideoPlayerState: 解析远程媒体路径失败: $e');
-        _setStatus(PlayerStatus.error, message: '解析远程媒体路径失败: $e');
+        final safeError = MediaSourceUtils.safeRemotePathError(e);
+        debugPrint('VideoPlayerState: 解析远程媒体路径失败: $safeError');
+        _setStatus(
+          PlayerStatus.error,
+          message: '解析远程媒体路径失败，请检查连接配置（$safeError）',
+        );
         _error = '解析远程媒体路径失败';
         _requestPlaybackErrorDialog();
         return;
@@ -344,6 +345,15 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         resolvedDetailContext.subtitle;
     _episodeId = historyItem?.episodeId; // 保存从历史记录传入的 episodeId
     _animeId = historyItem?.animeId ?? resolvedDetailContext.animeId;
+
+    // 跳过片头：在这里也起一次 AniSkip。
+    // 弹幕加载完成后还会再起一次（那时 duration 就绪，能传 episodeLength
+    // 让服务端过滤片长不符的标注）。这里先起一份是为了兜底——弹幕可能因为
+    // 未登录弹弹play、番剧无弹幕等原因拿不到，而 AniSkip 只依赖 animeId + 集数，
+    // 不该被弹幕拖累。重复调用几乎零成本：_malIdResolved 标志保证只解析一次 ID，
+    // AniSkipService 也有结果缓存。
+    unawaited(fetchAniSkipSegments());
+
     String message = '正在初始化播放器: ${p.basename(videoPath)}';
     if (_animeTitle != null) {
       message = '正在初始化播放器: $_animeTitle $_episodeTitle';
@@ -351,6 +361,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     _setStatus(PlayerStatus.loading, message: message);
     final fastPlaybackStartup =
         _context?.read<SettingsProvider>().fastPlaybackStartup ?? false;
+    final forceDfmDanmakuBeforePlayback = !kIsWeb &&
+        Platform.isWindows &&
+        DanmakuKernelFactory.activePluginRenderer == null &&
+        DanmakuKernelFactory.getKernelType() == DanmakuRenderEngine.dfmPlus;
 
     // 检测本地 fonts 文件夹
     if (!kIsWeb &&
@@ -364,8 +378,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       if (localFontsFolder != null) {
         // 检测到本地 fonts 文件夹，直接设置路径并立即应用
         _subtitleFontDir = localFontsFolder;
-        _statusMessages.add('发现Fonts目录，已自动配置字幕字体');
-        _notifyListeners();
+        debugPrint('发现Fonts目录，已自动配置字幕字体');
         debugPrint('[VideoPlayerState] 已设置本地fonts: $_subtitleFontDir');
         // 立即设置mpv字体目录，确保自动配置生效
         player.setProperty('sub-fonts-dir', localFontsFolder);
@@ -465,6 +478,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       // 准备播放器
       mediaPrepareStarted = true;
       await player.prepare();
+      debugPrint('[PlayerSetup] prepare 完成 kernel=${player.getPlayerKernelName()} '
+          'state=${player.state}');
+      // 内核 setMedia+prepare 后通常自动进入播放（mdk/media_kit 默认）。
+      debugPrint('[PlayerSetup] 媒体已 prepare，内核自动进入播放');
       final bool isMediaServer = videoPath.startsWith('jellyfin://') ||
           videoPath.startsWith('emby://');
       final bool isNetworkMedia = isMediaServer ||
@@ -524,8 +541,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         // 其他内核保持原有最多10秒的兼容轮询，不改变其启动体验。
         for (var waitCount = 0; waitCount < 100; waitCount++) {
           await Future.delayed(const Duration(milliseconds: 100));
-          if (player.state == PlaybackState.playing ||
-              player.state == PlaybackState.paused ||
+          if (player.state == PlaybackState.playing) {
+            break;
+          }
+          if (player.state == PlaybackState.paused ||
               (player.mediaInfo.duration > 0 &&
                   (player.prefersPlatformVideoSurface ||
                       player.textureId.value != null))) {
@@ -533,6 +552,8 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
           }
         }
       }
+      debugPrint('[PlayerSetup] 媒体就绪检查完成 state=${player.state} '
+          '进入纹理阶段');
       mediaPrepareCompleted = true;
 
       //debugPrint('5. 获取视频纹理...');
@@ -754,7 +775,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         //debugPrint('8. 恢复上次播放位置...');
         // [VIDEO-OPEN-PTM-DIAG] 根因2诊断：追踪视频打开时 playbackTimeMs 的时序
         // 假设：player.seek() 不更新 _playbackTimeMs/_smoothAnchorMs/_seekTargetMs，
-        // 导致 Ticker 首帧锚定时 playbackTimeMs=0 → 弹幕从头播放
+        // 导致 Ticker 首帧锚定时 playbackTimeMs=0  弹幕从头播放
         if (!kReleaseMode) {
           debugPrint('[VIDEO-OPEN-PTM-DIAG] BEFORE player.seek: '
               'playbackTimeMs=${_playbackTimeMs.value.toStringAsFixed(1)} '
@@ -762,7 +783,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
               '_smoothAnchorMs=${_smoothAnchorMs.toStringAsFixed(1)} '
               '_seekTargetMs=$_seekTargetMs '
               '_lastRawPlayerMs=$_lastRawPlayerMs '
-              '← player.seek() does NOT update ptm/anchor fields');
+              ' player.seek() does NOT update ptm/anchor fields');
         }
         // 先设置播放位置
         // Erika's native seek crosses an asynchronous platform bridge and
@@ -771,8 +792,8 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         // the first play command and leave the surface without a current frame
         // until the user seeks again.
         await player.seekAndWait(position: lastPosition);
-        // ✅ Bug-8-2 修复：player.seek() 只调用底层 API，不更新锚点字段，
-        // 导致 Ticker 首帧锚定到 playbackTimeMs=0 → 弹幕从头播放 + 回弹。
+        //  Bug-8-2 修复：player.seek() 只调用底层 API，不更新锚点字段，
+        // 导致 Ticker 首帧锚定到 playbackTimeMs=0  弹幕从头播放 + 回弹。
         // 手动更新所有锚点字段，与 seekTo() 保持一致。
         _playbackTimeMs.value = lastPosition.toDouble();
         _smoothAnchorMs = lastPosition.toDouble();
@@ -796,7 +817,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
               '_smoothAnchorMs=${_smoothAnchorMs.toStringAsFixed(1)} '
               '_seekTargetMs=$_seekTargetMs '
               '_lastRawPlayerMs=$_lastRawPlayerMs '
-              '← anchor fields NOW updated correctly');
+              ' anchor fields NOW updated correctly');
         }
       } else {
         _position = Duration.zero;
@@ -996,8 +1017,41 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         _updateMergedDanmakuList();
       }
 
-      if (!fastPlaybackStartup) {
+      if (!fastPlaybackStartup || forceDfmDanmakuBeforePlayback) {
         await loadInitialDanmaku();
+      }
+
+      final shouldGateDfmStartup = forceDfmDanmakuBeforePlayback &&
+          !isNativeDanmakuActive &&
+          _danmakuVisible &&
+          _danmakuList.isNotEmpty &&
+          !_isDisposed &&
+          initializationGeneration == _playbackGeneration;
+      if (shouldGateDfmStartup) {
+        // Some player backends may auto-resume after opening/seeking. Keep the
+        // media clock paused while the loading layer mounts the real DFM+
+        // instance, fills its glyph atlas, and publishes its first frame.
+        if (player.state == PlaybackState.playing) {
+          unawaited(player.pauseDirectly());
+        }
+        if (_isDisposed || initializationGeneration != _playbackGeneration) {
+          return;
+        }
+        final gateToken = _beginDfmStartupGate();
+        _setStatus(PlayerStatus.loading, message: '正在预热弹幕字形...');
+        final prewarmReady = await _waitForDfmStartupGate(gateToken);
+        if (_isDisposed || initializationGeneration != _playbackGeneration) {
+          return;
+        }
+        if (prewarmReady) {
+          // Keep the final completion marker visible for at least one frame
+          // before the loading layer gives way to playback.
+          await Future<void>.delayed(const Duration(milliseconds: 180));
+        }
+      }
+
+      if (forceDfmDanmakuBeforePlayback) {
+        _finishDfmStartupMessage(successful: _danmakuList.isNotEmpty);
       }
 
       // 设置进入最终加载阶段，以优化动画性能
@@ -1047,7 +1101,6 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       //debugPrint('12. 设置最终播放状态 (在可能的横屏切换之后)...');
       if (lastPosition == 0) {
         // 从头播放
-        // debugPrint('VideoPlayerState: Initializing playback from start, calling play().'); // <--- REMOVED PRINT
         play(); // Call our central play method
       } else {
         // 从中间恢复
@@ -1057,17 +1110,15 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
             PlayerStatus.playing,
             message: '正在播放 (恢复)',
           ); // Sync our status
-          // debugPrint('VideoPlayerState: Player already playing on resume. Directly starting screenshot timer.'); // <--- REMOVED PRINT
           _startScreenshotTimer(); // Start timer directly
         } else {
           // Player did not auto-play after seek, or was paused. We need to start it.
           // _status should be 'ready' from earlier _setStatus call in initializePlayer
-          // debugPrint('VideoPlayerState: Resuming playback (player was not auto-playing), calling play().'); // <--- REMOVED PRINT
           play(); // Call our central play method
         }
       }
 
-      if (fastPlaybackStartup) {
+      if (fastPlaybackStartup && !forceDfmDanmakuBeforePlayback) {
         _startBackgroundDanmakuLoading(videoPath, loadInitialDanmaku);
       }
 

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as transport;
 import 'package:nipaplay/services/dandanplay_service.dart';
+import 'package:nipaplay/services/nipaplay_server_router.dart';
 import 'package:nipaplay/utils/http_header_utils.dart';
 import 'package:nipaplay/utils/network_settings.dart';
 
@@ -57,7 +58,8 @@ class DandanplayHttpClient extends transport.BaseClient {
   Future<transport.StreamedResponse> send(transport.BaseRequest request) async {
     final target = targetUri(request.url);
     final authorization = _authorization();
-    if (NetworkSettings.isDandanplayServiceUri(target)) {
+    final isGatewayTarget = NetworkSettings.isDandanplayServiceUri(target);
+    if (isGatewayTarget) {
       if (!isAccountEntry(request.method, target)) {
         // The desktop relay injects its token. The browser only knows the
         // synchronized login state, and must never receive the desktop token.
@@ -70,13 +72,39 @@ class DandanplayHttpClient extends transport.BaseClient {
         addOrReplaceHeaders(request.headers, authorization);
       }
     } else {
-      // Older callers may still supply the account header for custom servers.
       final token = authorization['Authorization'];
-      if (token != null) {
+      final isSelectedCustomTarget = token != null &&
+          await NetworkSettings.isSelectedCustomDandanplayServiceUri(target);
+      if (isSelectedCustomTarget && !isAccountEntry(request.method, target)) {
+        // A selected custom server is an explicit trust decision. Give a
+        // compatible self-hosted proxy the same current account credential as
+        // the built-in gateways, even when an older caller omitted the header.
+        addOrReplaceHeaders(request.headers, authorization);
+      } else if (token != null && !isSelectedCustomTarget) {
+        // Only the custom server explicitly selected by the user is trusted to
+        // receive their Dandanplay account token. Keep stripping it from every
+        // unrelated provider handled by this shared client.
         removeHeaderIfValueMatches(request.headers, 'authorization', token);
       }
     }
-    return _inner.send(request);
+    try {
+      final response = await _inner.send(request);
+      if (isGatewayTarget) {
+        // 网关自身故障（nginx 502/504、网关 5xx）也计入失败，
+        // 以便连续失败后由备用服务器接管。
+        if (response.statusCode >= 500) {
+          NipaplayServerRouter.instance.reportFailure(target);
+        } else {
+          NipaplayServerRouter.instance.reportSuccess(target);
+        }
+      }
+      return response;
+    } catch (error) {
+      if (isGatewayTarget) {
+        NipaplayServerRouter.instance.reportFailure(target);
+      }
+      rethrow;
+    }
   }
 
   @override

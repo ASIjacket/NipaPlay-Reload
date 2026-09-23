@@ -303,15 +303,18 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       });
     }
 
+    if (newStatus == PlayerStatus.loading) {
+      _isStartupMessageFlowActive = true;
+    }
     if (clearPreviousMessages) {
       _statusMessages.clear();
     }
     if (message != null && message.isNotEmpty) {
-      _statusMessages.add(message);
-      // Optionally, limit the number of messages stored
-      // if (_statusMessages.length > 10) {
-      //   _statusMessages.removeAt(0);
-      // }
+      if (_isStartupMessageFlowActive) {
+        _recordStartupStatusMessage(message);
+      } else {
+        _statusMessages.add(message);
+      }
     }
 
     final preservePlaybackStatus = _isBackgroundDanmakuLoading &&
@@ -319,12 +322,22 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
         (newStatus == PlayerStatus.recognizing ||
             newStatus == PlayerStatus.ready ||
             newStatus == PlayerStatus.playing);
-    if (preservePlaybackStatus) {
+    final preserveStartupLoadingStatus = _isStartupMessageFlowActive &&
+        (_status == PlayerStatus.loading ||
+            _status == PlayerStatus.recognizing) &&
+        newStatus == PlayerStatus.playing;
+    if (preservePlaybackStatus || preserveStartupLoadingStatus) {
       _notifyListeners();
       return;
     }
 
     _status = newStatus;
+    if (newStatus == PlayerStatus.ready ||
+        newStatus == PlayerStatus.error ||
+        newStatus == PlayerStatus.idle ||
+        newStatus == PlayerStatus.disposed) {
+      _isStartupMessageFlowActive = false;
+    }
 
     // Wakelock logic
     if (_status == PlayerStatus.playing) {
@@ -464,10 +477,10 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       _bufferedPositionMs = 0;
       _playbackTimeMs.value = 0;
       _lastRawPlayerMs = -1; // 重置平滑时钟，下次 Ticker 重新对齐
-      // ✅ P2-LOOP-RESTART 修复：补齐 seekTo() 中正确设置的三个锚点字段
+      //  P2-LOOP-RESTART 修复：补齐 seekTo() 中正确设置的三个锚点字段
       // 根因：缺少 _smoothAnchorMs/_smoothAnchorElapsedUs/_seekTargetMs 设置
-      // → Ticker callback 下一帧从旧 player.position 重新锚定
-      // → playbackTimeMs 被覆盖回末尾 → 弹幕/视频跳回 → 鬼畜
+      //  Ticker callback 下一帧从旧 player.position 重新锚定
+      //  playbackTimeMs 被覆盖回末尾  弹幕/视频跳回  鬼畜
       // 参照：seekTo() (line 670-674) 正确设置了这三个字段
       _smoothAnchorMs = 0.0;
       _smoothAnchorElapsedUs = _lastElapsedUs;
@@ -496,6 +509,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   }
 
   void pause() {
+    _playbackIntentGeneration++;
     if (_status == PlayerStatus.playing) {
       final bool isWindowsMediaKit = !kIsWeb &&
           Platform.isWindows &&
@@ -574,6 +588,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   }
 
   void play() {
+    _playbackIntentGeneration++;
     // <<< ADDED DEBUG LOG >>>
     debugPrint(
       '[VideoPlayerState] play() called. hasVideo: $hasVideo, _status: $_status, '
@@ -610,16 +625,25 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
 
         // 播放开始时提交观看记录到弹弹play
         _submitWatchHistoryToDandanplay();
-      }).catchError((e) {
+      }).catchError((e) async {
         debugPrint('[VideoPlayerState] playDirectly() 调用失败: $e');
-        // 尝试使用传统方法
+        // 内核在后台可能进入 idle（erika ErikaStatus 3）：play 无效，需重载 media 再播
+        try {
+          final kernel = player.getPlayerKernelName();
+          if (kernel.toLowerCase().contains('erika') &&
+              _currentVideoPath != null && _currentVideoPath!.isNotEmpty) {
+            debugPrint('[VideoPlayerState] erika idle 检测到，重载 media 恢复播放');
+            await player.retryCurrentMediaLoad();
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            await player.playDirectly();
+          }
+        } catch (reopenErr) {
+          debugPrint('[VideoPlayerState] 重载 media 失败: $reopenErr');
+        }
         player.state = PlaybackState.playing;
         _setStatus(PlayerStatus.playing, message: '开始播放');
-
-        // 播放开始时提交观看记录到弹弹play
         _submitWatchHistoryToDandanplay();
       });
-
       // <<< ADDED DEBUG LOG >>>
       debugPrint(
         '[VideoPlayerState] play() -> _status set to PlayerStatus.playing. Notifying listeners.',
@@ -647,12 +671,12 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
         _startUiUpdateTimer();
       }
       if (!(_uiUpdateTicker?.isActive ?? false)) {
-        // ✅ P2 修复：恢复播放时重设锚点，避免 Ticker elapsed 重置导致 elapsedDeltaUs 负值
+        //  P2 修复：恢复播放时重设锚点，避免 Ticker elapsed 重置导致 elapsedDeltaUs 负值
         // Flutter Ticker stop()+start() 后 elapsed 从 0 重新开始，
         // 但 _smoothAnchorElapsedUs 保留暂停前的值（如 5,000,000μs），
-        // 导致恢复首帧 elapsedDeltaUs = 16,667 - 5,000,000 = 负数 → smoothMs 大幅落后
+        // 导致恢复首帧 elapsedDeltaUs = 16,667 - 5,000,000 = 负数  smoothMs 大幅落后
         //
-        // ✅ P3 修复：使用暂停时保存的 playbackTimeMs 作为锚点，
+        //  P3 修复：使用暂停时保存的 playbackTimeMs 作为锚点，
         // 而不是让首帧走"重锚到 player.position"路径。
         // mpv 恢复后 player.position 可能回退（比暂停前小几十ms），
         // 直接锚定到 playerMs 会导致弹幕跳变到错误时间点。
@@ -663,7 +687,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
           // ════════════════════════════════════════════════════════════════════
           // 正常暂停恢复：_pausedPlaybackTimeMs 是本集暂停位置，用作锚点无缝继续
           // 切集污染：_pausedPlaybackTimeMs 是旧集末尾（_clearPreviousVideoState 漏清理时），
-          //   误用会导致 playbackTimeMs 卡在旧集末尾 → 弹幕查不到 → 后续突跌回弹
+          //   误用会导致 playbackTimeMs 卡在旧集末尾  弹幕查不到  后续突跌回弹
           //   判定：_pausedPlaybackTimeMs > 新集 duration+1s（旧集末尾超过新集时长）
           //         或 _pausedPlaybackTimeMs>1s 且 _position<100ms（旧集末尾值 + 新集开头位置）
           final isSuspectEpisodeSwitch = _pausedPlaybackTimeMs! >
@@ -675,7 +699,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
                 'pausedPlaybackTimeMs=${_pausedPlaybackTimeMs!.toStringAsFixed(1)}ms '
                 'newDuration=${_duration.inMilliseconds}ms '
                 'newPosition=${_position.inMilliseconds}ms '
-                '← SUSPECT_EPISODE_SWITCH=$isSuspectEpisodeSwitch '
+                ' SUSPECT_EPISODE_SWITCH=$isSuspectEpisodeSwitch '
                 '${isSuspectEpisodeSwitch ? "丢弃旧集末尾污染值，走正常首帧锚定" : "正常暂停恢复，用作锚点"}');
           }
           if (isSuspectEpisodeSwitch) {
@@ -715,16 +739,18 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   }
 
   void _clearPreviousVideoState() {
+    _cancelDfmStartupGate();
+    _isStartupMessageFlowActive = false;
     _playbackGeneration++;
     _isBackgroundDanmakuLoading = false;
     // ════════════════════════════════════════════════════════════════════
     //  切集时清理平滑时钟锚点 + _pausedPlaybackTimeMs（2026-06-21）
     // ════════════════════════════════════════════════════════════════════
     // 原缺陷：_clearPreviousVideoState 不重置平滑时钟字段，旧集末尾位置残留。
-    // 切集时序：playNextEpisode→togglePlayPause→pause 保存 _pausedPlaybackTimeMs=旧集末尾
-    // → initializePlayer→_clearPreviousVideoState（此处）不清理
-    // → 新集 play() 暂停恢复路径误把 _pausedPlaybackTimeMs(旧集末尾) 当新集锚点
-    // → playbackTimeMs 卡在旧集末尾（clamp 到新集 duration）→ 弹幕查不到 → 后续突跌回弹
+    // 切集时序：playNextEpisodetogglePlayPausepause 保存 _pausedPlaybackTimeMs=旧集末尾
+    //  initializePlayer_clearPreviousVideoState（此处）不清理
+    //  新集 play() 暂停恢复路径误把 _pausedPlaybackTimeMs(旧集末尾) 当新集锚点
+    //  playbackTimeMs 卡在旧集末尾（clamp 到新集 duration） 弹幕查不到  后续突跌回弹
     //
     // 切集首个清理点同步重置所有平滑时钟字段 + _pausedPlaybackTimeMs
     // 让新集 play() 走正常首帧锚定（锚定到 player.position=0），而非误用旧集末尾。
@@ -741,7 +767,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
       debugPrint('[EP-SWITCH-DIAG] _clearPreviousVideoState ANCHOR RESET: '
           'ptm=0.0 smoothAnchorMs=0.0 smoothAnchorElapsedUs=$_smoothAnchorElapsedUs '
           'seekTargetMs=null lastRawPlayerMs=-1 pausedPlaybackTimeMs=null '
-          '← 切集锚点已清理，新集将走正常首帧锚定');
+          ' 切集锚点已清理，新集将走正常首帧锚定');
     }
     _subtitleManager.clearExternalSubtitle(notifyListenersToo: false);
     _currentVideoPath = null;
@@ -757,11 +783,21 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _episodeTitle = null;
     _episodeId = null; // 清除弹幕ID
     _animeId = null; // 清除弹幕ID
+    // 跳过片头：连带清掉 ID 解析状态。
+    // 同一部番的 bangumiId / MAL ID 在切集时是稳定的，但缓存它们会让
+    // 「换一部番播放」时拿到上一部的 ID——而这里没有任何信息能可靠区分
+    // 「同番切集」和「换番重播」，所以一律清空重解析（Bangumi / AniList
+    // 各自有内存缓存兜底，重复解析几乎零成本）。
+    _bangumiId = null;
+    _episodeNumber = null;
+    _animeMalId = null;
+    _malIdResolved = false;
     _initialHistoryItem = null;
     _playbackDetailContext = null;
     _playbackPlaylistCache.invalidate();
     _danmakuList.clear();
     _danmakuListVersion++;
+    clearSkipSegments();
     _danmakuTracks.clear();
     _danmakuTrackEnabled.clear();
     _isSpoilerDanmakuAnalyzing = false;
@@ -790,10 +826,18 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     // Do NOT call WakelockPlus.disable() here directly, _setStatus will handle it
   }
 
-  void _saveCurrentPositionToHistory() {
+  Future<void> _saveCurrentPositionToHistory() async {
     if (_currentVideoPath != null) {
-      _saveVideoPosition(_currentVideoPath!, _position.inMilliseconds);
+      await _saveVideoPosition(_currentVideoPath!, _position.inMilliseconds);
     }
+    await PlaybackPositionStore.instance.flush();
+  }
+
+  /// Called only after the user has accepted exiting, before process shutdown.
+  Future<void> savePlaybackPositionForExit() async {
+    _uiUpdateTicker?.stop();
+    _uiUpdateTimer?.cancel();
+    await _saveCurrentPositionToHistory();
   }
 
   void _resetVideoState() {
@@ -809,7 +853,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _bufferedPositionMs = 0;
     _playbackTimeMs.value = 0;
     _lastRawPlayerMs = -1; // 重置平滑时钟
-    // ✅ P2-LOOP-RESTART 一致性修复：补齐锚点字段（与 seekTo() 保持一致）
+    //  P2-LOOP-RESTART 一致性修复：补齐锚点字段（与 seekTo() 保持一致）
     _smoothAnchorMs = 0.0;
     _smoothAnchorElapsedUs = 0;
     _seekTargetMs =
@@ -834,11 +878,21 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _episodeTitle = null;
     _episodeId = null; // 清除弹幕ID
     _animeId = null; // 清除弹幕ID
+    // 跳过片头：连带清掉 ID 解析状态。
+    // 同一部番的 bangumiId / MAL ID 在切集时是稳定的，但缓存它们会让
+    // 「换一部番播放」时拿到上一部的 ID——而这里没有任何信息能可靠区分
+    // 「同番切集」和「换番重播」，所以一律清空重解析（Bangumi / AniList
+    // 各自有内存缓存兜底，重复解析几乎零成本）。
+    _bangumiId = null;
+    _episodeNumber = null;
+    _animeMalId = null;
+    _malIdResolved = false;
     _initialHistoryItem = null;
     _playbackDetailContext = null;
     _playbackPlaylistCache.invalidate();
     _danmakuList.clear();
     _danmakuListVersion++;
+    clearSkipSegments();
     _danmakuTracks.clear();
     _danmakuTrackEnabled.clear();
     _isSpoilerDanmakuAnalyzing = false;
@@ -1215,8 +1269,133 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
 
   // 添加单个状态消息的方法
   void _addStatusMessage(String message) {
-    _statusMessages.add(message);
+    if (_isStartupMessageFlowActive) {
+      _recordStartupStatusMessage(message);
+    } else {
+      _statusMessages.add(message);
+    }
     _notifyListeners();
+  }
+
+  bool _isDfmStartupMessageMode() =>
+      !kIsWeb &&
+      DanmakuKernelFactory.activePluginRenderer == null &&
+      DanmakuKernelFactory.getKernelType() == DanmakuRenderEngine.dfmPlus;
+
+  bool _isDanmakuStartupMessage(String message) {
+    return message.contains('弹幕') ||
+        message.contains('识别视频') ||
+        message.contains('视频识别');
+  }
+
+  bool _isFailedStartupMessage(String message) {
+    return message.contains('失败') ||
+        message.contains('无法') ||
+        message.contains('无效') ||
+        message.contains('未匹配') ||
+        message.contains('未找到') ||
+        message.contains('未登录') ||
+        message.contains('跳过');
+  }
+
+  bool _isCompletedStartupMessage(String message) {
+    return message.contains('完成') ||
+        message.contains('成功') ||
+        message.startsWith('已自动加载');
+  }
+
+  String _asStartupProgress(String message) {
+    final base = message.trim().replaceFirst(RegExp(r'[.…]+$'), '');
+    return '$base...';
+  }
+
+  bool _isPendingStartupMessage(String message) {
+    return message.endsWith('...') &&
+        !message.endsWith('...[完成]') &&
+        !message.endsWith('...[失败]');
+  }
+
+  void _finishLatestStartupMessage({required bool successful}) {
+    if (_statusMessages.isEmpty) return;
+    final index = _statusMessages.length - 1;
+    final current = _statusMessages[index];
+    if (!_isPendingStartupMessage(current)) return;
+    _statusMessages[index] = '$current${successful ? '[完成]' : '[失败]'}';
+  }
+
+  void _startStartupMessage(String message) {
+    final progress = _asStartupProgress(message);
+    if (_statusMessages.isNotEmpty && _statusMessages.last == progress) return;
+    if (_statusMessages.isNotEmpty &&
+        _isPendingStartupMessage(_statusMessages.last) &&
+        progress.startsWith('正在初始化播放器') &&
+        _statusMessages.last.startsWith('正在初始化播放器')) {
+      return;
+    }
+    _finishLatestStartupMessage(successful: true);
+    _statusMessages.add(progress);
+  }
+
+  String _failedStageFor(String message) {
+    if (message.contains('识别') || message.contains('匹配')) {
+      return '正在识别视频...';
+    }
+    if (message.contains('弹幕')) return '正在加载弹幕...';
+    return _asStartupProgress(message);
+  }
+
+  void _recordStartupStatusMessage(String message) {
+    final trimmed = message.trim();
+    if (trimmed.isEmpty) return;
+
+    final isDanmaku = _isDanmakuStartupMessage(trimmed);
+    if (_isDfmStartupMessageMode() && isDanmaku) {
+      const stage = '全舰弹幕装填...';
+      var stageIndex = _statusMessages.lastIndexWhere(
+        (entry) => entry.startsWith(stage),
+      );
+      if (stageIndex < 0) {
+        _startStartupMessage(stage);
+        stageIndex = _statusMessages.length - 1;
+      } else if (!_isFailedStartupMessage(trimmed) &&
+          _statusMessages[stageIndex].endsWith('[失败]')) {
+        // A later fallback source can recover a failed online attempt. Reuse
+        // the same condensed DFM line while that fallback is still working.
+        _statusMessages[stageIndex] = stage;
+      }
+      if (_isFailedStartupMessage(trimmed)) {
+        if (_statusMessages[stageIndex] == stage) {
+          _statusMessages[stageIndex] = '$stage[失败]';
+        }
+      }
+      return;
+    }
+
+    if (trimmed.startsWith('视频识别成功，正在加载弹幕')) {
+      _finishLatestStartupMessage(successful: true);
+      _startStartupMessage('正在加载弹幕...');
+      return;
+    }
+    if (_isFailedStartupMessage(trimmed)) {
+      final failedStage = _failedStageFor(trimmed);
+      final activeIsStartupPreparation = _statusMessages.isNotEmpty &&
+          _isPendingStartupMessage(_statusMessages.last) &&
+          (_statusMessages.last.contains('初始化播放器') ||
+              _statusMessages.last.contains('准备') ||
+              _statusMessages.last.contains('媒体播放'));
+      if (_statusMessages.isEmpty ||
+          !_isPendingStartupMessage(_statusMessages.last) ||
+          activeIsStartupPreparation) {
+        _startStartupMessage(failedStage);
+      }
+      _finishLatestStartupMessage(successful: false);
+      return;
+    }
+    if (_isCompletedStartupMessage(trimmed) || trimmed == '准备就绪') {
+      _finishLatestStartupMessage(successful: true);
+      return;
+    }
+    _startStartupMessage(trimmed);
   }
 
   // 清除所有状态消息的方法
@@ -1225,9 +1404,20 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     _notifyListeners();
   }
 
+  // SRT 字幕拖动激活标志：拖动期间屏蔽音量/亮度/进度手势，避免误触
+  // （字段声明在 VideoPlayerState 主类，见 video_player_state.dart）
+  bool get subtitleDragActive => _subtitleDragActive;
+
+  void setSubtitleDragActive(bool active) {
+    if (_subtitleDragActive == active) return;
+    _subtitleDragActive = active;
+    _notifyListeners();
+  }
+
   // Volume Drag Methods
   void startVolumeDrag() {
     if (!globals.isMobilePlatform) return;
+    if (_subtitleDragActive) return; // 字幕拖动中不响应音量手势
     _initialDragVolume = _currentVolume;
     _showVolumeIndicator(); // We'll define this next
     debugPrint("Volume drag started. Initial drag volume: $_initialDragVolume");
@@ -1279,7 +1469,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   void increaseVolume({double? step}) {
     try {
       final double baseStep = step ?? _volumeStep;
-      // 使用整数百分比运算避免浮点精度问题（100%→95%→90% 而非 100%→94.9%→89.9%）
+      // 使用整数百分比运算避免浮点精度问题（100%95%90% 而非 100%94.9%89.9%）
       final int currentPercent = (_currentVolume * 100).round();
       final int stepPercent = (baseStep * 100).round();
       final int newPercent = (currentPercent + stepPercent).clamp(0, 100);
@@ -1312,7 +1502,7 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   void decreaseVolume({double? step}) {
     try {
       final double baseStep = step ?? _volumeStep;
-      // 使用整数百分比运算避免浮点精度问题（100%→95%→90% 而非 100%→94.9%→89.9%）
+      // 使用整数百分比运算避免浮点精度问题（100%95%90% 而非 100%94.9%89.9%）
       final int currentPercent = (_currentVolume * 100).round();
       final int stepPercent = (baseStep * 100).round();
       final int newPercent = (currentPercent - stepPercent).clamp(0, 100);
