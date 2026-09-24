@@ -1,7 +1,81 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nipaplay/services/emby_playback_sync_service.dart';
 
 void main() {
+  group('EmbyProgressPrefetch', () {
+    const progress = <String, dynamic>{'PlaybackPositionTicks': 4542870000};
+    const wait = Duration(seconds: 10);
+
+    test('hands over the prefetched result without fetching again', () async {
+      final prefetch = EmbyProgressPrefetch();
+      var fetches = 0;
+      prefetch.start('190216', () async {
+        fetches++;
+        return progress;
+      });
+
+      expect(await prefetch.take('190216', maxWait: wait), progress);
+      expect(fetches, 1);
+    });
+
+    test('has nothing for an item it was not started for', () {
+      // The caller then falls back to fetching directly, as before.
+      final prefetch = EmbyProgressPrefetch()
+        ..start('190216', () async => progress);
+
+      expect(prefetch.take('246315', maxWait: wait), isNull);
+    });
+
+    test('is used once', () async {
+      final prefetch = EmbyProgressPrefetch()
+        ..start('190216', () async => progress);
+
+      await prefetch.take('190216', maxWait: wait);
+      expect(prefetch.take('190216', maxWait: wait), isNull);
+    });
+
+    test('a newer prefetch replaces the previous one', () async {
+      final prefetch = EmbyProgressPrefetch()
+        ..start('246315', () async => progress)
+        ..start('190216', () async => null);
+
+      expect(prefetch.take('246315', maxWait: wait), isNull);
+    });
+
+    test('waits for a prefetch that is still running', () async {
+      final response = Completer<Map<String, dynamic>?>();
+      final prefetch = EmbyProgressPrefetch()
+        ..start('190216', () => response.future);
+
+      final taken = prefetch.take('190216', maxWait: wait)!;
+      response.complete(progress);
+      expect(await taken, progress);
+    });
+
+    test('gives up after maxWait so playback start is never held longer',
+        () async {
+      final prefetch = EmbyProgressPrefetch()
+        ..start('190216', () => Completer<Map<String, dynamic>?>().future);
+
+      expect(
+        await prefetch.take(
+          '190216',
+          maxWait: const Duration(milliseconds: 20),
+        ),
+        isNull,
+      );
+    });
+
+    test('a failed prefetch yields no progress instead of an error', () async {
+      final prefetch = EmbyProgressPrefetch()
+        ..start('190216', () async => throw Exception('handshake'));
+
+      expect(await prefetch.take('190216', maxWait: wait), isNull);
+    });
+  });
+
   group('hasEmbyResumeProgress', () {
     test('accepts an in-progress item reported without PlayCount or '
         'LastPlayedDate', () {

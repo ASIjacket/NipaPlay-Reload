@@ -59,6 +59,53 @@ bool shouldUploadEmbyProgress({
   return nowMs - lastUploadMs >= minIntervalMs;
 }
 
+/// 起播时预取的服务器续播进度。
+///
+/// 进度原本等视频就绪后才去拉，这时播放器正在全速缓冲，请求常常 10 秒内回不来，
+/// 只能改用本地记录。现在开始加载媒体时就发出请求，与加载并行；到原来的时机
+/// 再取结果，最多仍只等 10 秒，所以起播不会比原来慢。
+@visibleForTesting
+class EmbyProgressPrefetch {
+  String? _itemId;
+  Future<Map<String, dynamic>?>? _pending;
+
+  /// 为 [itemId] 发起预取；之前没被取走的预取作废。
+  void start(String itemId, Future<Map<String, dynamic>?> Function() fetch) {
+    _itemId = itemId;
+    _pending = _guard(fetch);
+  }
+
+  // 经 async 函数包一层：得到的 Future 运行时类型一定可为 null，take 里的
+  // timeout 才能返回 null；失败也在这里吞掉，没人取用时不会冒出未处理的异常。
+  static Future<Map<String, dynamic>?> _guard(
+      Future<Map<String, dynamic>?> Function() fetch) async {
+    try {
+      return await fetch();
+    } catch (e) {
+      debugPrint('[EmbySync] 预取服务器进度失败: $e');
+      return null;
+    }
+  }
+
+  /// 取走 [itemId] 的预取结果，最多再等 [maxWait]。
+  ///
+  /// 没有这一项的预取时返回 null，由调用方照旧直接请求。返回的 Future 结果为
+  /// null 表示预取没拿到进度（失败、超时或服务器上没有），不该再请求一次。
+  Future<Map<String, dynamic>?>? take(
+    String itemId, {
+    required Duration maxWait,
+  }) {
+    final pending = _itemId == itemId ? _pending : null;
+    _itemId = null;
+    _pending = null;
+    if (pending == null) return null;
+    return pending.timeout(maxWait, onTimeout: () {
+      debugPrint('[EmbySync] 预取的服务器进度 ${maxWait.inSeconds} 秒内仍未返回');
+      return null;
+    });
+  }
+}
+
 /// Emby播放记录同步服务
 /// 基于Jellyfin同步服务实现，适配Emby API接口差异
 class EmbyPlaybackSyncService {
@@ -76,6 +123,22 @@ class EmbyPlaybackSyncService {
   String? _currentPlayMethod;
   bool _isPlaying = false;
 
+  final EmbyProgressPrefetch _progressPrefetch = EmbyProgressPrefetch();
+
+  /// 开始加载 Emby 媒体时调用：提前拉取服务器续播进度，与媒体加载并行。
+  /// 结果由 [syncOnPlayStart] 取用。
+  void prefetchServerProgress(String itemId) {
+    if (!_embyService.isConnected) return;
+    debugPrint('[EmbySync] 预取服务器播放进度: $itemId');
+    _progressPrefetch.start(
+      itemId,
+      () => _getServerPlaybackProgress(
+        itemId,
+        timeout: const Duration(seconds: 30),
+      ),
+    );
+  }
+
   /// 开始播放时调用，拉取服务器记录并与本地记录做冲突处理
   Future<WatchHistoryItem?> syncOnPlayStart(
       String itemId, WatchHistoryItem localHistory) async {
@@ -87,8 +150,12 @@ class EmbyPlaybackSyncService {
         return localHistory;
       }
 
-      // 1. 获取服务器播放记录
-      final serverProgress = await _getServerPlaybackProgress(itemId);
+      // 1. 获取服务器播放记录：优先用起播时预取的结果，没有预取才现拉
+      final serverProgress = await (_progressPrefetch.take(
+            itemId,
+            maxWait: const Duration(seconds: 10),
+          ) ??
+          _getServerPlaybackProgress(itemId));
 
       if (serverProgress == null) {
         // 请求失败和"服务器上没有进度"都会走到这里，前面的日志会说明是哪一种。
@@ -257,14 +324,15 @@ class EmbyPlaybackSyncService {
   }
 
   /// 获取服务器播放进度
-  Future<Map<String, dynamic>?> _getServerPlaybackProgress(
-      String itemId) async {
+  Future<Map<String, dynamic>?> _getServerPlaybackProgress(String itemId,
+      {Duration timeout = const Duration(seconds: 10)}) async {
     try {
       debugPrint('[EmbySync] 开始获取服务器播放进度: $itemId');
 
       // 使用Emby的用户数据API - 需要添加/emby前缀并使用正确的userId
       final userDataResponse = await _makeAuthenticatedRequest(
         '/emby/Users/${_embyService.userId}/Items/$itemId',
+        timeout: timeout,
       );
 
       if (userDataResponse.statusCode != 200) {
@@ -380,6 +448,7 @@ class EmbyPlaybackSyncService {
     String endpoint, {
     String method = 'GET',
     String? body,
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!_embyService.isConnected || _embyService.accessToken == null) {
       throw Exception('Emby未连接或未认证');
@@ -400,7 +469,7 @@ class EmbyPlaybackSyncService {
     try {
       return await transport.send(
         request,
-        timeout: const Duration(seconds: 10),
+        timeout: timeout,
       );
     } finally {
       transport.close();

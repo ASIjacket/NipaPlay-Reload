@@ -82,6 +82,8 @@ python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/build-windows.
 
 - 拉取：部分 Emby 服务器（如本仓库用户的）对看到一半的条目返回 `PlayCount: 0` 且
   **不带** `LastPlayedDate`，上游要求两者都有，服务器进度一律被丢弃。
+- 拉取超时：上游在视频就绪后才发请求，此时播放器正全速缓冲，请求常在 10 秒超时内
+  回不来（用户日志实测）。
 - 上报：上游用 `_position % 1000 < 100` 抽样，读到的是 await 之后的位置，前面耗时
   超过约 100ms 这一轮就静默不传；暂停时又每帧带着 `IsPaused: false` 连发。
 
@@ -90,12 +92,16 @@ python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/build-windows.
 - `lib/services/emby_playback_sync_service.dart`：顶层函数 `hasEmbyResumeProgress`
   （`PlaybackPositionTicks > 0` 即算有进度）、`preferEmbyServerResume`（有
   `LastPlayedDate` 比时间，没有则取更靠后的位置，绝不倒退本地进度）、
-  `shouldUploadEmbyProgress`（只在播放中、按墙钟 5 秒节流）；以及几条 `[EmbySync]` 日志。
+  `shouldUploadEmbyProgress`（只在播放中、按墙钟 5 秒节流）；`EmbyProgressPrefetch`
+  与 `prefetchServerProgress`（开始加载媒体时预取服务器进度，`syncOnPlayStart` 取用，
+  最多等 10 秒）；`_getServerPlaybackProgress` / `_makeAuthenticatedRequest` 多了
+  `timeout` 参数；以及几条 `[EmbySync]` 日志。
 - `lib/utils/video_player_state.dart`：字段 `_lastEmbyProgressUploadMs`。
 - `lib/utils/video_player_state/video_player_state_danmaku.dart`：`_updateWatchHistory`
   里的 Emby 上报块改用 `shouldUploadEmbyProgress`（Jellyfin 块未动）。
 - `lib/utils/video_player_state/video_player_state_player_setup.dart`：恢复
-  `_initializeWatchHistory` 失败时的日志。
+  `_initializeWatchHistory` 失败时的日志；`initializePlayer` 识别到 Emby 流时调用
+  `prefetchServerProgress`。
 - `test/emby_playback_sync_resume_test.dart`。
 
 **同步后自检**

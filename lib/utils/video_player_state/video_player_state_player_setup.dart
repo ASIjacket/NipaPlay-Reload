@@ -141,6 +141,9 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       final infoUrl = playbackSession?.streamUrl ?? actualPlayUrl;
       debugPrint('检测到Emby流媒体: videoPath=$videoPath, actualPlayUrl=$infoUrl');
       _addStatusMessage('正在准备Emby流媒体播放...');
+      // 与媒体加载并行地拉取服务器续播进度，见 EmbyProgressPrefetch。
+      EmbyPlaybackSyncService()
+          .prefetchServerProgress(videoPath.replaceFirst('emby://', ''));
     }
 
     if (!kIsWeb &&
