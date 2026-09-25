@@ -11,6 +11,34 @@ import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/utils/storage_service.dart';
 import 'package:path/path.dart' as p;
 
+/// 把服务器同步来的记录合并进已有的本地记录。
+///
+/// 本地的弹幕 ID 只在 animeId 与 episodeId 成对存在时保留：真正的弹幕匹配
+/// 总是两个一起写。只有 episodeId 的记录是旧版同步把 Emby 集号误写进去的，
+/// 合并时顺手清掉，免得以后和补上的 animeId 凑成一对、加载到错误的弹幕。
+/// [incoming] 来自服务器，本身不带弹幕 ID（见 `_convertResumeItem`）。
+@visibleForTesting
+WatchHistoryItem mergeSyncedHistoryItem({
+  required WatchHistoryItem incoming,
+  required WatchHistoryItem existing,
+}) {
+  final bool incomingHasMeaningfulName =
+      incoming.animeName.isNotEmpty && incoming.animeName != 'Server Item';
+  final bool existingHasDanmakuMatch =
+      existing.animeId != null && existing.episodeId != null;
+
+  return incoming.copyWith(
+    animeName:
+        incomingHasMeaningfulName ? incoming.animeName : existing.animeName,
+    episodeTitle: existing.episodeTitle ?? incoming.episodeTitle,
+    episodeId: existingHasDanmakuMatch ? existing.episodeId : null,
+    animeId: existing.animeId ?? incoming.animeId,
+    thumbnailPath: incoming.thumbnailPath ?? existing.thumbnailPath,
+    isFromScan: existing.isFromScan,
+    videoHash: existing.videoHash ?? incoming.videoHash,
+  );
+}
+
 class ServerHistorySyncService {
   ServerHistorySyncService._internal();
 
@@ -337,8 +365,10 @@ class ServerHistorySyncService {
       filePath: '$filePathPrefix$itemId',
       animeName: displayName,
       episodeTitle: item['Name'] as String?,
-      episodeId:
-          (item['IndexNumber'] is int) ? item['IndexNumber'] as int : null,
+      // episodeId 是弹弹play的剧集 ID，不是集号。原先这里写入 Emby 的
+      // IndexNumber（如 5），之后一旦记录补上了 animeId，就会按"剧集 5"
+      // 加载到毫不相干的弹幕。服务器同步不知道弹幕匹配，留空。
+      episodeId: null,
       animeId: null,
       watchProgress: progress,
       lastPosition: positionMs,
@@ -352,21 +382,8 @@ class ServerHistorySyncService {
   WatchHistoryItem _mergeHistoryItems({
     required WatchHistoryItem incoming,
     required WatchHistoryItem existing,
-  }) {
-    final bool incomingHasMeaningfulName =
-        incoming.animeName.isNotEmpty && incoming.animeName != 'Server Item';
-
-    return incoming.copyWith(
-      animeName:
-          incomingHasMeaningfulName ? incoming.animeName : existing.animeName,
-      episodeTitle: existing.episodeTitle ?? incoming.episodeTitle,
-      episodeId: existing.episodeId ?? incoming.episodeId,
-      animeId: existing.animeId ?? incoming.animeId,
-      thumbnailPath: incoming.thumbnailPath ?? existing.thumbnailPath,
-      isFromScan: existing.isFromScan,
-      videoHash: existing.videoHash ?? incoming.videoHash,
-    );
-  }
+  }) =>
+      mergeSyncedHistoryItem(incoming: incoming, existing: existing);
 
   int _ticksToMilliseconds(int ticks) {
     if (ticks <= 0) return 0;
