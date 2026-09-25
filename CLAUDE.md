@@ -69,7 +69,7 @@ on:
 
 ```bash
 git diff --stat upstream/main..HEAD
-# 期望：除 CLAUDE.md 外，只有本条的 build-windows.yml 和第 2 条列出的文件有差异
+# 期望：除 CLAUDE.md 外，只有本条的 build-windows.yml 和第 2–4 条列出的文件有差异
 python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/build-windows.yml')); print(list(d[True].keys()))"
 # 期望：['workflow_dispatch', 'workflow_call']
 ```
@@ -115,6 +115,62 @@ flutter test test/emby_playback_sync_resume_test.dart
 
 ---
 
+## 3. Emby 弹幕匹配：哈希、集数、按季记忆
+
+**保留原因**
+
+- 哈希：设置了自定义 UA 时，`RemoteMediaFetcher` 的 HttpClient 默认 UA 固定为
+  `NipaPlay/1.0`，dart:io 跟随 302 时不沿用请求头里的 UA，网盘直链按 UA 放行即 403；
+  而且起播要等哈希失败（8–22 秒）。
+- 只选番剧不选集时，`_matchWithDandanPlay` 用 `episodeNumber` 键查
+  `_getAnimeEpisodes` 的结果（键实为 `episodeIndex`），总落到第 1 集。
+- 上游的 `EmbyEpisodeMappingService` 只写不读，同一季每集都要重新匹配。
+
+**改动内容**
+
+- `lib/utils/remote_media_fetcher.dart`：HttpClient 默认 UA 用实际 UA；`fetchHead`
+  增加 `abort`。
+- `lib/services/emby_dandanplay_matcher.dart`：`findEpisodeByIndex`；
+  `waitForVideoHash`（最多等 8 秒，超时中止下载）；本季记忆的读取（哈希之后、
+  搜索之前）、写入（仅弹窗里亲自选的；弹窗结果加 `episodeExplicit`）、
+  `rememberManualMatch` / `undoRememberedMatch` / `seriesMemoryForItem` /
+  `forgetSeriesMemoryForItem`。
+- 新增 `lib/services/emby_danmaku_series_memory.dart`、
+  `lib/utils/emby_danmaku_memory_actions.dart`。
+- `lib/themes/nipaplay/widgets/danmaku_settings_menu.dart`、
+  `lib/themes/cupertino/widgets/player_menu/cupertino_danmaku_settings_pane.dart`：
+  手动匹配后记住本季（"仅本集"撤回），有记忆时显示"忘记本季匹配"。
+
+**同步后自检**
+
+```bash
+flutter test test/remote_media_fetcher_user_agent_test.dart test/remote_media_fetcher_abort_test.dart \
+  test/emby_hash_wait_test.dart test/emby_dandanplay_episode_lookup_test.dart \
+  test/emby_danmaku_series_memory_test.dart
+```
+
+---
+
+## 4. 其他小修复
+
+- `lib/services/server_history_sync_service.dart`：同步来的记录不再把 Emby 集号写进
+  弹幕 `episodeId`；合并抽成 `mergeSyncedHistoryItem`，孤立的 `episodeId` 清掉。
+- 日志脱敏：新增 `lib/utils/log_redaction.dart`，`DebugLogService._addLogEntry` 与
+  `_redactMediaUrlForLog`（`lib/utils/video_player_state.dart`）调用它。
+- mpv 内核解码器显示：`describeMpvDecoder`（`lib/utils/decoder_manager.dart`）、
+  `Player.readMpvPropertyAsync` / 适配器 `readMpvProperty`、播放信息里
+  `hwdec-current=no` 显示"软件"、切换硬解开关后刷新显示
+  （`video_player_state_preferences.dart`）。
+
+**同步后自检**
+
+```bash
+flutter test test/server_history_sync_merge_test.dart test/log_redaction_test.dart \
+  test/mpv_decoder_label_test.dart
+```
+
+---
+
 ## 同步上游的做法
 
 ```bash
@@ -124,4 +180,5 @@ git merge upstream/main
 ```
 
 若 `build-windows.yml` 冲突，以本文件记录的版本为准重新应用，不要直接取上游版本。
-第 2 条涉及的文件冲突时，按第 2 条“同步后自检”处理。
+第 2–4 条涉及的文件冲突时，先看上游是否已修好同一问题：修好了就取上游、删掉对应
+条目；没修就按记录重新应用，再跑该条的"同步后自检"。
