@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 // crypto not needed here (hash computed in RemoteMediaFetcher)
@@ -37,17 +38,20 @@ Map<String, dynamic>? findEpisodeByIndex(
 /// 起播前等弹幕哈希最多 [budget]；超时或出错都返回空哈希，匹配照常往下走
 /// （与哈希失败时同一条路：记忆、搜索、弹窗）。
 ///
-/// 超时后原任务仍在后台继续，成功结果会进缓存，下次打开这一集直接命中。
+/// 超时会调用 [onGiveUp]，调用方借此中止下载：哈希要从同一个直链读 16MB，
+/// 放任它在后台继续，会和紧接着打开视频的播放器抢同一个网盘的连接数。
 @visibleForTesting
 Future<Map<String, dynamic>> waitForVideoHash(
   Future<Map<String, dynamic>> task, {
   required Duration budget,
+  VoidCallback? onGiveUp,
 }) async {
   Map<String, dynamic> empty() =>
       <String, dynamic>{'hash': '', 'fileName': '', 'fileSize': 0};
   try {
     return await task.timeout(budget, onTimeout: () {
-      debugPrint('Emby 哈希 ${budget.inSeconds} 秒内未完成，先按其它方式匹配');
+      debugPrint('Emby 哈希 ${budget.inSeconds} 秒内未完成，中止并先按其它方式匹配');
+      onGiveUp?.call();
       return empty();
     });
   } catch (e) {
@@ -397,9 +401,11 @@ class EmbyDandanplayMatcher {
       debugPrint('Emby流媒体URL: $streamUrl');
 
       // 获取视频信息：优先尝试哈希匹配，但最多等 _hashWaitBudget，不让它拖住起播
+      final hashAbort = Completer<void>();
       final Map<String, dynamic> videoInfo = await waitForVideoHash(
-        calculateVideoHash(episode),
+        calculateVideoHash(episode, abort: hashAbort.future),
         budget: _hashWaitBudget,
+        onGiveUp: () => hashAbort.complete(),
       );
 
       // 2. 通过DandanPlay API匹配内容
@@ -1137,7 +1143,11 @@ class EmbyDandanplayMatcher {
   /// 返回包含哈希值、原始文件名和文件大小的Map
   ///
   /// 优先通过直连流+WebDAV首段策略自动计算哈希，失败时回退到手动匹配
-  Future<Map<String, dynamic>> calculateVideoHash(EmbyEpisodeInfo episode) {
+  /// [abort] 完成时中止下载；只作用于本次新建的任务，复用进行中的任务时忽略。
+  Future<Map<String, dynamic>> calculateVideoHash(
+    EmbyEpisodeInfo episode, {
+    Future<void>? abort,
+  }) {
     final cached = _videoInfoCache[episode.id];
     if (cached != null) {
       debugPrint('命中Emby视频哈希缓存: ${episode.id}');
@@ -1150,7 +1160,8 @@ class EmbyDandanplayMatcher {
       return runningTask;
     }
 
-    final task = _computeVideoHashInternal(episode).then((result) {
+    final task =
+        _computeVideoHashInternal(episode, abort: abort).then((result) {
       if (_isValidVideoInfo(result)) {
         _videoInfoCache[episode.id] = result;
       }
@@ -1163,8 +1174,9 @@ class EmbyDandanplayMatcher {
   }
 
   Future<Map<String, dynamic>> _computeVideoHashInternal(
-    EmbyEpisodeInfo episode,
-  ) async {
+    EmbyEpisodeInfo episode, {
+    Future<void>? abort,
+  }) async {
     final String seriesName = episode.seriesName ?? '未知剧集';
     final String episodeName = episode.name.isNotEmpty ? episode.name : '未知标题';
     final String fallbackFileName = '$seriesName - $episodeName.mp4';
@@ -1178,6 +1190,7 @@ class EmbyDandanplayMatcher {
 
       final remoteHead = await RemoteMediaFetcher.fetchHead(
         Uri.parse(streamUrl),
+        abort: abort,
       );
       debugPrint(
         'Emby 哈希计算成功，读取 ${remoteHead.bytesHashed} 字节，hash=${remoteHead.hash}',

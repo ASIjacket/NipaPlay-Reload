@@ -30,9 +30,11 @@ class RemoteMediaFetcher {
   static const Duration defaultTimeout = Duration(seconds: 20);
 
   /// 获取远程媒体元信息并计算首段哈希；原生路径不把媒体字节传回 Dart。
+  /// [abort] 完成时中止下载（仅 Dart 路径；Rust 路径无法中途取消）。
   static Future<RemoteMediaHead> fetchHead(
     Uri originalUri, {
     String? userAgent,
+    Future<void>? abort,
   }) async {
     final configuredUserAgent = sanitizeHttpUserAgent(
       userAgent ?? PlayerFactory.getCustomPlayerUA(),
@@ -62,12 +64,14 @@ class RemoteMediaFetcher {
     return _fetchHeadWithDart(
       originalUri,
       userAgent: effectiveUserAgent,
+      abort: abort,
     );
   }
 
   static Future<RemoteMediaHead> _fetchHeadWithDart(
     Uri originalUri, {
     required String userAgent,
+    Future<void>? abort,
   }) async {
     final sanitizedUri = _buildSanitizedUri(originalUri);
     final headers = <String, String>{
@@ -84,6 +88,8 @@ class RemoteMediaFetcher {
     final client = IOClient(
       _createHttpClientForUri(originalUri, userAgent: userAgent),
     );
+    // 强制关闭连接即可中止进行中的请求，下面的读取随之失败并走正常的失败路径。
+    abort?.then((_) => client.close());
     try {
       String? resolvedFileName;
       int? fileSize;

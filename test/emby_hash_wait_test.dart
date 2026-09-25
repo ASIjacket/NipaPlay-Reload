@@ -28,6 +28,23 @@ void main() {
     expect(result['fileSize'], 0);
   });
 
+  test('asks to abort the download only when it gives up', () async {
+    var gaveUp = 0;
+    await waitForVideoHash(
+      Future.value(hashed),
+      budget: budget,
+      onGiveUp: () => gaveUp++,
+    );
+    expect(gaveUp, 0);
+
+    await waitForVideoHash(
+      Completer<Map<String, dynamic>>().future,
+      budget: const Duration(milliseconds: 20),
+      onGiveUp: () => gaveUp++,
+    );
+    expect(gaveUp, 1);
+  });
+
   test('a hashing error also yields an empty hash', () async {
     final result = await waitForVideoHash(
       Future<Map<String, dynamic>>.error(Exception('HTTP 403')),
