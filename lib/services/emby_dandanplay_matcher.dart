@@ -16,6 +16,21 @@ import 'package:nipaplay/providers/settings_provider.dart';
 import 'package:nipaplay/widgets/in_view_dialog.dart';
 import 'package:provider/provider.dart';
 
+/// 在 `_getAnimeEpisodes` 返回的剧集列表里按集数查找。
+///
+/// 列表项的集数存在 `episodeIndex` 键下。原先这里读的是 `episodeNumber`，
+/// 永远取不到，于是只选了番剧、没选具体集时一律落到第 1 集的弹幕。
+@visibleForTesting
+Map<String, dynamic>? findEpisodeByIndex(
+  List<Map<String, dynamic>> episodes,
+  int index,
+) {
+  for (final ep in episodes) {
+    if (ep['episodeIndex'] == index) return ep;
+  }
+  return null;
+}
+
 /// 负责将Emby媒体与DandanPlay的内容匹配，以获取弹幕和元数据
 class EmbyDandanplayMatcher {
   static final EmbyDandanplayMatcher instance =
@@ -575,15 +590,14 @@ class EmbyDandanplayMatcher {
         if (episodesList.isNotEmpty) {
           if (episode.indexNumber != null) {
             // Try to match by episode.indexNumber
-            matchedEpisode = episodesList.firstWhere(
-              (ep) => ep['episodeNumber'] == episode.indexNumber,
-              orElse: () {
-                debugPrint(
-                  '无法通过 indexNumber ${episode.indexNumber} 找到剧集，将尝试选择第一个剧集',
-                );
-                return episodesList[0];
-              },
-            );
+            matchedEpisode =
+                findEpisodeByIndex(episodesList, episode.indexNumber!);
+            if (matchedEpisode == null) {
+              debugPrint(
+                '无法通过 indexNumber ${episode.indexNumber} 找到剧集，将尝试选择第一个剧集',
+              );
+              matchedEpisode = episodesList[0];
+            }
           } else {
             // No indexNumber from Emby episode, default to the first episode of the matched anime
             matchedEpisode = episodesList[0];
