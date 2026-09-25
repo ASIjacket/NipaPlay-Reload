@@ -31,6 +31,28 @@ Map<String, dynamic>? findEpisodeByIndex(
   return null;
 }
 
+/// 起播前等弹幕哈希最多 [budget]；超时或出错都返回空哈希，匹配照常往下走
+/// （与哈希失败时同一条路：记忆、搜索、弹窗）。
+///
+/// 超时后原任务仍在后台继续，成功结果会进缓存，下次打开这一集直接命中。
+@visibleForTesting
+Future<Map<String, dynamic>> waitForVideoHash(
+  Future<Map<String, dynamic>> task, {
+  required Duration budget,
+}) async {
+  Map<String, dynamic> empty() =>
+      <String, dynamic>{'hash': '', 'fileName': '', 'fileSize': 0};
+  try {
+    return await task.timeout(budget, onTimeout: () {
+      debugPrint('Emby 哈希 ${budget.inSeconds} 秒内未完成，先按其它方式匹配');
+      return empty();
+    });
+  } catch (e) {
+    debugPrint('获取视频信息失败: $e');
+    return empty();
+  }
+}
+
 /// 负责将Emby媒体与DandanPlay的内容匹配，以获取弹幕和元数据
 class EmbyDandanplayMatcher {
   static final EmbyDandanplayMatcher instance =
@@ -40,6 +62,10 @@ class EmbyDandanplayMatcher {
 
   final Map<String, Future<Map<String, dynamic>>> _videoInfoTasks = {};
   final Map<String, Map<String, dynamic>> _videoInfoCache = {};
+
+  /// 起播前最多等哈希多久。哈希要先下载视频开头 16MB；失败时原先要白等
+  /// 8–22 秒才进入下一步。
+  static const Duration _hashWaitBudget = Duration(seconds: 8);
 
   // 预计算哈希值和预匹配弹幕ID的方法
   //
@@ -178,14 +204,11 @@ class EmbyDandanplayMatcher {
       debugPrint('正在为Emby内容创建可播放项: ${episode.seriesName} - ${episode.name}');
       debugPrint('Emby流媒体URL: $streamUrl');
 
-      // 获取视频信息（阻塞等待，确保优先尝试哈希匹配）
-      Map<String, dynamic> videoInfo = {};
-      try {
-        videoInfo = await calculateVideoHash(episode);
-      } catch (e) {
-        debugPrint('获取视频信息失败: $e');
-        videoInfo = {'hash': '', 'fileName': '', 'fileSize': 0};
-      }
+      // 获取视频信息：优先尝试哈希匹配，但最多等 _hashWaitBudget，不让它拖住起播
+      final Map<String, dynamic> videoInfo = await waitForVideoHash(
+        calculateVideoHash(episode),
+        budget: _hashWaitBudget,
+      );
 
       // 2. 通过DandanPlay API匹配内容
       final Map<String, dynamic> dummyVideoInfo = await _matchWithDandanPlay(
