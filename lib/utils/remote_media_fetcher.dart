@@ -81,7 +81,9 @@ class RemoteMediaFetcher {
       headers['Authorization'] = authHeader;
     }
 
-    final client = IOClient(_createHttpClientForUri(originalUri));
+    final client = IOClient(
+      _createHttpClientForUri(originalUri, userAgent: userAgent),
+    );
     try {
       String? resolvedFileName;
       int? fileSize;
@@ -420,9 +422,15 @@ class RemoteMediaFetcher {
     return 'Basic $credentials';
   }
 
-  static HttpClient _createHttpClientForUri(Uri uri) {
+  static HttpClient _createHttpClientForUri(
+    Uri uri, {
+    required String userAgent,
+  }) {
     final httpClient = HttpClient();
-    httpClient.userAgent = 'NipaPlay/1.0';
+    // 必须设成实际要用的 UA：dart:io 跟随重定向时新请求自带这里的默认 UA，
+    // 不会沿用上一跳请求头里的 User-Agent。原先固定为 NipaPlay/1.0，媒体服务器
+    // 302 到网盘直链后 UA 就变了，按 UA 放行的直链会返回 403，弹幕哈希失败。
+    httpClient.userAgent = userAgent;
     httpClient.autoUncompress = false;
     if (_shouldBypassProxy(uri.host)) {
       httpClient.findProxy = (_) => 'DIRECT';
