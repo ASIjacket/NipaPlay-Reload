@@ -13,8 +13,10 @@ import 'blur_button.dart';
 import 'blur_dropdown.dart';
 import 'fluent_settings_switch.dart';
 import 'settings_slider.dart';
+import 'package:nipaplay/services/emby_danmaku_series_memory.dart';
 import 'package:nipaplay/services/manual_danmaku_matcher.dart';
 import 'package:nipaplay/utils/danmaku_history_sync.dart';
+import 'package:nipaplay/utils/emby_danmaku_memory_actions.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/providers/ui_theme_provider.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/text_input_dialog.dart';
@@ -64,11 +66,29 @@ class _DanmakuSettingsMenuState extends State<DanmakuSettingsMenu> {
   bool _hasBlockWordError = false;
   String? _blockWordErrorMessage;
   bool _isSavingDanmaku = false;
+  // 当前 Emby 剧集所在季记住的弹幕匹配；不是 Emby 或没有记忆时为 null。
+  EmbyDanmakuSeriesMemoryRecord? _seriesMemory;
+
+  @override
+  void initState() {
+    super.initState();
+    EmbyDanmakuSeriesMemory.instance.revision.addListener(_loadSeriesMemory);
+    _loadSeriesMemory();
+  }
 
   @override
   void dispose() {
+    EmbyDanmakuSeriesMemory.instance.revision.removeListener(_loadSeriesMemory);
     _blockWordController.dispose();
     super.dispose();
+  }
+
+  void _loadSeriesMemory() {
+    final path = widget.videoState.currentVideoPath;
+    loadEmbySeriesDanmakuMemory(path).then((record) {
+      if (!mounted || widget.videoState.currentVideoPath != path) return;
+      setState(() => _seriesMemory = record);
+    });
   }
 
   List<String> _splitBlockWords(String input) {
@@ -1088,12 +1108,41 @@ class _DanmakuSettingsMenuState extends State<DanmakuSettingsMenu> {
                               }
                             } catch (e) {}
                             videoState.loadDanmaku(episodeId, animeId);
+                            // Emby 剧集：记住本季选择，后续集自动沿用
+                            final toastContext = uiThemeProvider.isPhoneLayout
+                                ? rootContext
+                                : context;
+                            if (initialVideoPath != null &&
+                                toastContext.mounted) {
+                              await rememberEmbyManualDanmakuMatch(
+                                toastContext,
+                                videoPath: initialVideoPath,
+                                animeId: animeId,
+                                episodeId: episodeId,
+                                animeTitle: result['animeTitle']?.toString(),
+                              );
+                            }
                           }
                         }
                       },
                       expandHorizontally: true,
                     ),
                     const SettingsHintText('手动搜索并选择匹配的弹幕文件'),
+                    if (_seriesMemory != null) ...[
+                      const SizedBox(height: 8),
+                      BlurButton(
+                        text: '忘记本季匹配',
+                        icon: Icons.link_off,
+                        onTap: () => forgetEmbySeriesDanmakuMemory(
+                          context,
+                          widget.videoState.currentVideoPath,
+                        ),
+                        expandHorizontally: true,
+                      ),
+                      SettingsHintText(
+                        '本季已记住《${_seriesMemory!.animeTitle}》，后续集自动沿用',
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -7,9 +7,12 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/services/dandanplay_service.dart';
 import 'package:nipaplay/services/danmaku_matching_service.dart';
 import 'package:nipaplay/services/danmaku_cache_manager.dart';
+import 'package:nipaplay/services/emby_danmaku_series_memory.dart';
 import 'package:nipaplay/services/emby_episode_mapping_service.dart';
+import 'package:nipaplay/services/emby_media_preference_store.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/tvos_remote_text_input_scope.dart';
 import 'package:nipaplay/utils/remote_media_fetcher.dart';
 import 'package:nipaplay/providers/settings_provider.dart';
@@ -51,6 +54,19 @@ Future<Map<String, dynamic>> waitForVideoHash(
     debugPrint('获取视频信息失败: $e');
     return empty();
   }
+}
+
+/// 写入本季记忆之前的状态，供"仅本集"撤回。
+class EmbyDanmakuMemoryUndo {
+  const EmbyDanmakuMemoryUndo({
+    required this.key,
+    required this.previous,
+    required this.animeTitle,
+  });
+
+  final String key;
+  final EmbyDanmakuSeriesMemoryRecord? previous;
+  final String animeTitle;
 }
 
 /// 负责将Emby媒体与DandanPlay的内容匹配，以获取弹幕和元数据
@@ -136,6 +152,182 @@ class EmbyDandanplayMatcher {
     } catch (e) {
       debugPrint('预计算和匹配过程中出错: $e');
       return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // ---- 本季弹幕记忆（见 EmbyDanmakuSeriesMemory）----
+
+  // 播放器里只有 itemId，记忆要用到剧/季信息，查一次后缓存。
+  final Map<String, EmbyEpisodeInfo> _episodeDetailsCache = {};
+
+  static int? _toInt(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
+  String? _seriesMemoryKey(EmbyEpisodeInfo episode) {
+    final service = EmbyService.instance;
+    return embyDanmakuMemoryKey(
+      accountKey: embyAccountKey(service.currentProfile, service.userId),
+      itemId: episode.id,
+      seriesId: episode.seriesId,
+      seasonId: episode.seasonId,
+      parentIndexNumber: episode.parentIndexNumber,
+    );
+  }
+
+  Future<EmbyEpisodeInfo?> _episodeForItem(String itemId) async {
+    final cached = _episodeDetailsCache[itemId];
+    if (cached != null) return cached;
+    final details = await EmbyService.instance.getEpisodeDetails(itemId);
+    if (details != null) _episodeDetailsCache[itemId] = details;
+    return details;
+  }
+
+  /// 用本季记忆推算本集的弹幕剧集；没有记忆或推算不出时返回 null。
+  Future<Map<String, dynamic>?> _resolveFromSeriesMemory(
+    EmbyEpisodeInfo episode,
+  ) async {
+    try {
+      final index = episode.indexNumber;
+      final key = _seriesMemoryKey(episode);
+      if (index == null || key == null) return null;
+      final record = await EmbyDanmakuSeriesMemory.instance.read(key);
+      if (record == null) return null;
+
+      final episodes =
+          await DanmakuMatchingService.instance.getAnimeEpisodes(record.animeId);
+      final mapped = mapEpisodeFromMemory(
+        episodes: episodes,
+        record: record,
+        targetIndex: index,
+      );
+      final episodeId = _toInt(mapped?['episodeId']);
+      if (mapped == null || episodeId == null) {
+        debugPrint(
+          '[弹幕记忆] 本季记住的是《${record.animeTitle}》，但推算不出第 $index 集，改走常规匹配',
+        );
+        return null;
+      }
+      final rawTitle = mapped['episodeTitle']?.toString() ?? '';
+      final episodeTitle = rawTitle.isNotEmpty ? rawTitle : episode.name;
+      debugPrint(
+        '[弹幕记忆] 沿用本季匹配:《${record.animeTitle}》$episodeTitle, episodeId=$episodeId',
+      );
+      return {
+        'isMatched': true,
+        'animeId': record.animeId,
+        'animeTitle': record.animeTitle,
+        'episodeId': episodeId,
+        'episodeTitle': episodeTitle,
+        'matches': [
+          {
+            'animeId': record.animeId,
+            'animeTitle': record.animeTitle,
+            'episodeId': episodeId,
+            'episodeTitle': episodeTitle,
+          },
+        ],
+      };
+    } catch (e) {
+      debugPrint('[弹幕记忆] 读取失败，改走常规匹配: $e');
+      return null;
+    }
+  }
+
+  /// 记住用户在这一季的选择；[episodeId] 为 null 表示只选了番剧。
+  Future<EmbyDanmakuMemoryUndo?> _rememberSeriesChoice({
+    required EmbyEpisodeInfo episode,
+    required int animeId,
+    required String animeTitle,
+    int? episodeId,
+  }) async {
+    try {
+      final index = episode.indexNumber;
+      final key = _seriesMemoryKey(episode);
+      if (index == null || key == null || animeId <= 0) return null;
+      final store = EmbyDanmakuSeriesMemory.instance;
+      final previous = await store.read(key);
+      await store.write(
+        key,
+        EmbyDanmakuSeriesMemoryRecord(
+          animeId: animeId,
+          animeTitle: animeTitle,
+          anchorIndex: index,
+          anchorEpisodeId: episodeId,
+          anchorEpisodeNumber: episodeId == null ? '$index' : null,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+      debugPrint(
+        '[弹幕记忆] 记住本季匹配:《$animeTitle》，锚点 Emby 第 $index 集 -> ${episodeId ?? '同集号'}',
+      );
+      return EmbyDanmakuMemoryUndo(
+        key: key,
+        previous: previous,
+        animeTitle: animeTitle,
+      );
+    } catch (e) {
+      debugPrint('[弹幕记忆] 写入失败: $e');
+      return null;
+    }
+  }
+
+  /// 播放器里手动匹配后记住本季选择；电影或拿不到剧集信息时返回 null。
+  Future<EmbyDanmakuMemoryUndo?> rememberManualMatch({
+    required String itemId,
+    required int animeId,
+    required String animeTitle,
+    required int episodeId,
+  }) async {
+    try {
+      final episode = await _episodeForItem(itemId);
+      if (episode == null) return null;
+      return _rememberSeriesChoice(
+        episode: episode,
+        animeId: animeId,
+        animeTitle: animeTitle,
+        episodeId: episodeId,
+      );
+    } catch (e) {
+      debugPrint('[弹幕记忆] 手动匹配后记忆失败: $e');
+      return null;
+    }
+  }
+
+  /// "仅本集"：撤回刚写入的本季记忆，恢复成之前的样子。
+  Future<void> undoRememberedMatch(EmbyDanmakuMemoryUndo undo) async {
+    final store = EmbyDanmakuSeriesMemory.instance;
+    final previous = undo.previous;
+    if (previous == null) {
+      await store.remove(undo.key);
+    } else {
+      await store.write(undo.key, previous);
+    }
+  }
+
+  /// 这一集所在季记住的匹配，供播放器菜单显示。
+  Future<EmbyDanmakuSeriesMemoryRecord?> seriesMemoryForItem(
+    String itemId,
+  ) async {
+    try {
+      final episode = await _episodeForItem(itemId);
+      final key = episode == null ? null : _seriesMemoryKey(episode);
+      if (key == null) return null;
+      return await EmbyDanmakuSeriesMemory.instance.read(key);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// 忘记这一集所在季的匹配。
+  Future<void> forgetSeriesMemoryForItem(String itemId) async {
+    final episode = await _episodeForItem(itemId);
+    final key = episode == null ? null : _seriesMemoryKey(episode);
+    if (key != null) {
+      await EmbyDanmakuSeriesMemory.instance.remove(key);
     }
   }
 
@@ -389,6 +581,18 @@ class EmbyDandanplayMatcher {
         debugPrint('没有可用的精确信息，使用标题搜索匹配');
       }
 
+      // 本季记忆：用户在这一季明确选过匹配时，按集号推算本集，不再弹窗。
+      final remembered = await _resolveFromSeriesMemory(episode);
+      if (remembered != null) {
+        if (showMatchDialog && context.mounted) {
+          BlurSnackBar.show(
+            context,
+            '已沿用本季匹配：《${remembered['animeTitle']}》${remembered['episodeTitle']}',
+          );
+        }
+        return remembered;
+      }
+
       // 为弹窗预搜索一些候选项，但不依赖搜索结果
       String extractSearchKeywordFromFileName(String rawName) {
         if (rawName.trim().isEmpty) return '';
@@ -437,6 +641,8 @@ class EmbyDandanplayMatcher {
       Map<String, dynamic>? selectedMatch; // This will hold the chosen anime
       Map<String, dynamic>?
           matchedEpisode; // This will hold the chosen episode, if selected directly in dialog
+      // 只有用户在弹窗里亲自选的匹配才写进本季记忆，自动选的不记。
+      bool userChoseMatch = false;
       bool autoPickEnabled = true;
       try {
         autoPickEnabled = context
@@ -469,6 +675,7 @@ class EmbyDandanplayMatcher {
           return {};
         }
         selectedMatch = dialogResult;
+        userChoseMatch = true;
         if (dialogResult.containsKey('episodeId') &&
             dialogResult['episodeId'] != null) {
           matchedEpisode = dialogResult;
@@ -577,6 +784,7 @@ class EmbyDandanplayMatcher {
           return {};
         }
         selectedMatch = dialogResult;
+        userChoseMatch = true;
         if (dialogResult.containsKey('episodeId') &&
             dialogResult['episodeId'] != null) {
           matchedEpisode = dialogResult;
@@ -678,6 +886,20 @@ class EmbyDandanplayMatcher {
         } catch (e) {
           debugPrint('保存映射关系到数据库时出错: $e');
           // 不影响主流程，继续返回匹配结果
+        }
+
+        // 用户亲自选的匹配记进本季记忆。弹窗里只选了番剧时（剧集是默认
+        // 带出的），按集号一一对应记。
+        final int? chosenAnimeId = _toInt(selectedMatch['animeId']);
+        if (userChoseMatch && chosenAnimeId != null) {
+          await _rememberSeriesChoice(
+            episode: episode,
+            animeId: chosenAnimeId,
+            animeTitle: '${selectedMatch['animeTitle'] ?? ''}',
+            episodeId: matchedEpisode['episodeExplicit'] == true
+                ? _toInt(episodeId)
+                : null,
+          );
         }
       }
 
@@ -1371,6 +1593,8 @@ class _AnimeMatchDialogState extends State<AnimeMatchDialog> {
     if (_selectedEpisode != null && _selectedEpisode!.isNotEmpty) {
       result['episodeId'] = _selectedEpisode!['episodeId'];
       result['episodeTitle'] = _selectedEpisode!['episodeTitle'];
+      // 与下面"没选就默认第一集"区分开：只有亲自选的剧集才能当本季记忆的锚点。
+      result['episodeExplicit'] = true;
       debugPrint(
         '用户选择了剧集: ${_selectedEpisode!['episodeTitle']}, episodeId=${_selectedEpisode!['episodeId']}',
       );

@@ -6,7 +6,9 @@ import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_adaptive_platform_ui.dart'
     show AdaptiveButton, AdaptiveButtonStyle;
 
+import 'package:nipaplay/services/emby_danmaku_series_memory.dart';
 import 'package:nipaplay/services/manual_danmaku_matcher.dart';
+import 'package:nipaplay/utils/emby_danmaku_memory_actions.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/themes/cupertino/widgets/player_menu/adaptive_player_menu_primitives.dart';
 import 'package:nipaplay/themes/cupertino/widgets/player_menu/cupertino_player_slider.dart';
@@ -58,11 +60,29 @@ class _CupertinoDanmakuSettingsPaneState
   final TextEditingController _blockWordController = TextEditingController();
   String? _blockWordError;
   bool _isSavingDanmaku = false;
+  // 当前 Emby 剧集所在季记住的弹幕匹配；不是 Emby 或没有记忆时为 null。
+  EmbyDanmakuSeriesMemoryRecord? _seriesMemory;
+
+  @override
+  void initState() {
+    super.initState();
+    EmbyDanmakuSeriesMemory.instance.revision.addListener(_loadSeriesMemory);
+    _loadSeriesMemory();
+  }
 
   @override
   void dispose() {
+    EmbyDanmakuSeriesMemory.instance.revision.removeListener(_loadSeriesMemory);
     _blockWordController.dispose();
     super.dispose();
+  }
+
+  void _loadSeriesMemory() {
+    final path = widget.videoState.currentVideoPath;
+    loadEmbySeriesDanmakuMemory(path).then((record) {
+      if (!mounted || widget.videoState.currentVideoPath != path) return;
+      setState(() => _seriesMemory = record);
+    });
   }
 
   void _addBlockWord() {
@@ -133,7 +153,17 @@ class _CupertinoDanmakuSettingsPaneState
     } catch (_) {}
 
     videoState.loadDanmaku(episodeId, animeId);
-    if (mounted) {
+    if (!mounted) return;
+    // Emby 剧集：记住本季选择，后续集自动沿用（会弹出带"仅本集"的提示）
+    final remembered = initialVideoPath != null &&
+        await rememberEmbyManualDanmakuMatch(
+          context,
+          videoPath: initialVideoPath,
+          animeId: animeId,
+          episodeId: episodeId,
+          animeTitle: result['animeTitle']?.toString(),
+        );
+    if (!remembered && mounted) {
       BlurSnackBar.show(context, '已开始加载弹幕');
     }
   }
@@ -361,6 +391,18 @@ class _CupertinoDanmakuSettingsPaneState
                   trailing: const Icon(CupertinoIcons.right_chevron),
                   onTap: _handleManualMatch,
                 ),
+                if (_seriesMemory != null)
+                  AdaptivePlayerMenuTile(
+                    title: const Text('忘记本季匹配'),
+                    subtitle: Text(
+                      '本季已记住《${_seriesMemory!.animeTitle}》，后续集自动沿用',
+                    ),
+                    trailing: const Icon(CupertinoIcons.xmark_circle),
+                    onTap: () => forgetEmbySeriesDanmakuMemory(
+                      context,
+                      widget.videoState.currentVideoPath,
+                    ),
+                  ),
               ],
             ),
             if (!isLargeScreen)
