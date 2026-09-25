@@ -128,6 +128,7 @@ import 'shared_remote_history_helper.dart';
 import 'package:nipaplay/utils/watch_history_auto_match_helper.dart';
 import 'media_source_utils.dart';
 import 'package:nipaplay/l10n/app_locale_utils.dart';
+import 'package:nipaplay/utils/log_redaction.dart';
 
 part 'video_player_state/video_player_state_metadata.dart';
 part 'video_player_state/video_player_state_initialization.dart';
@@ -145,10 +146,8 @@ part 'video_player_state/video_player_state_chapters.dart';
 part 'video_player_state/video_player_state_intro_skip.dart';
 
 String _redactMediaUrlForLog(Object? value) {
-  final text = value?.toString() ?? 'null';
-  final uri = Uri.tryParse(text);
-  if (uri == null || uri.userInfo.isEmpty) return text;
-  return uri.replace(userInfo: '').toString();
+  // 除用户名密码外，查询参数里的访问令牌（如 Emby 的 api_key）也要遮掉。
+  return redactSecretsForLog(value?.toString() ?? 'null');
 }
 
 enum SubtitleStyleOverrideMode { auto, none, scale, force }

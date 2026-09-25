@@ -1,6 +1,7 @@
 import 'dart:collection';
 import 'dart:io';
 import 'package:flutter/widgets.dart';
+import 'package:nipaplay/utils/log_redaction.dart';
 
 /// 日志条目模型
 class LogEntry {
@@ -121,7 +122,13 @@ class DebugLogService extends ChangeNotifier {
 
   /// 添加日志条目
   void _addLogEntry(LogEntry entry) {
-    _logEntries.add(entry);
+    // 所有导出、分享、落盘的日志都取自这里，在入口统一遮掉访问令牌。
+    _logEntries.add(LogEntry(
+      timestamp: entry.timestamp,
+      message: redactSecretsForLog(entry.message),
+      level: entry.level,
+      tag: entry.tag,
+    ));
 
     // 限制日志数量，移除最旧的条目
     while (_logEntries.length > _maxLogEntries) {
