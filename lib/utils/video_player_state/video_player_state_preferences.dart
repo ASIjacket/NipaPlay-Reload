@@ -530,6 +530,11 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
           // 的解码器信息来自 DecoderManager，需同步更新，否则开关后仍显示旧的
           // "硬解 - VT（尝试）"。setDecoders 对 media_kit 仅存 map，无副作用。
           await _decoderManager.applyHardwareDecodingPreference(_useHardwareDecoder);
+          // 上面按配置写的是预期值；等 mpv 重建解码器后读一次真实状态刷新显示。
+          Future.delayed(
+            const Duration(seconds: 1),
+            _updateCurrentActiveDecoder,
+          );
         }
       }
 

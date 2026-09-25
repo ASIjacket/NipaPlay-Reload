@@ -478,10 +478,12 @@ class _PlaybackInfoMenuState extends State<PlaybackInfoMenu> {
           // 解码方式：优先 hwdec-current（实际使用），否则根据 hwdec 判断
           final hwdecCurrent = mpvProps['hwdec-current'];
           final hwdec = mpvProps['hwdec'];
-          if (hwdecCurrent is String &&
-              hwdecCurrent.isNotEmpty &&
-              hwdecCurrent.toLowerCase() != 'no') {
-            decodeMethod = '硬件 ($hwdecCurrent)';
+          if (hwdecCurrent is String && hwdecCurrent.isNotEmpty) {
+            // hwdec-current 是 mpv 实际在用的；no 表示已退回软解，不能再看
+            // hwdec（那只是请求值，如 auto）去报"硬件"。
+            decodeMethod = hwdecCurrent.toLowerCase() == 'no'
+                ? '软件'
+                : '硬件 ($hwdecCurrent)';
           } else if (hwdec is String &&
               hwdec.isNotEmpty &&
               hwdec.toLowerCase() != 'no') {

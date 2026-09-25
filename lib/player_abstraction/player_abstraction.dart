@@ -483,6 +483,19 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
     return const <String, dynamic>{};
   }
 
+  /// 读取底层 mpv 的实时属性；非 mpv 内核或读取失败时返回 null。
+  Future<String?> readMpvPropertyAsync(String name) async {
+    try {
+      final dyn = _delegate as dynamic;
+      final f = dyn.readMpvProperty?.call(name);
+      if (f is Future) {
+        final value = await f;
+        return value?.toString();
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // 异步版本：允许底层等待获取属性（例如 mpv 的 getProperty 通常是异步的）
   Future<Map<String, dynamic>> getDetailedMediaInfoAsync() async {
     try {

@@ -78,6 +78,18 @@ List<String> migrateLegacyLinuxDecoderOrderForNvidia({
   return List<String>.from(_linuxNvidiaDecoderOrder);
 }
 
+/// 由 mpv 的 `hwdec-current` 得到解码器显示文本；还不知道时返回 null。
+///
+/// `no` 表示 mpv 正在软解（libavcodec，即 FFmpeg），其余值是实际生效的硬解
+/// 接口，如 `d3d11va`、`nvdec-copy`。
+@visibleForTesting
+String? describeMpvDecoder(String? hwdecCurrent) {
+  final value = hwdecCurrent?.trim() ?? '';
+  if (value.isEmpty) return null;
+  if (value.toLowerCase() == 'no') return '软解 - FFmpeg';
+  return '硬解 - $value';
+}
+
 bool _isSoftwareDecoderName(String decoder) {
   final lower = decoder.toLowerCase();
   return lower.contains('ffmpeg') || lower.contains('dav1d');
@@ -366,6 +378,21 @@ class DecoderManager {
         _currentDecoder = "未知 (无视频轨道)";
         SystemResourceMonitor().setActiveDecoder(_currentDecoder!);
         return;
+      }
+
+      // Media Kit（mpv）：直接问 mpv 实际在用的硬解。下面的回退逻辑看的是
+      // 配置的 MDK 解码器名单（如 MFT:d3d=11），与 mpv 的真实状态无关，
+      // 关掉硬解开关后照样显示"硬解"。
+      if (player.getPlayerKernelName() == 'Media Kit') {
+        final mpvDecoder = describeMpvDecoder(
+          await player.readMpvPropertyAsync('hwdec-current'),
+        );
+        if (mpvDecoder != null) {
+          _currentDecoder = mpvDecoder;
+          SystemResourceMonitor().setActiveDecoder(mpvDecoder);
+          debugPrint("更新活跃解码器: $mpvDecoder");
+          return;
+        }
       }
 
       // 尝试从播放器获取当前正在使用的解码器名称

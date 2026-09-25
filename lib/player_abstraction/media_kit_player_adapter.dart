@@ -2894,6 +2894,10 @@ class MediaKitPlayerAdapter
     }
   }
 
+  /// 读取 mpv 的实时属性值（如 hwdec-current），供界面显示真实状态。
+  Future<String?> readMpvProperty(String name) =>
+      _getMpvPropertyForDiagnostics(name);
+
   Future<String?> _getMpvPropertyForDiagnostics(String name) async {
     try {
       final dynamic platform = _player.platform;
